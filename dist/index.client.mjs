@@ -1,5 +1,13 @@
-// src/client/provider.tsx
-import { createContext, useMemo, useCallback, useState } from "react";
+"use client";
+
+// src/index.client.tsx
+import {
+  createContext,
+  useMemo,
+  useCallback,
+  useState,
+  useContext
+} from "react";
 import useSWR from "swr";
 import { jsx } from "react/jsx-runtime";
 var AuthContext = createContext(null);
@@ -72,9 +80,6 @@ function AuthProvider({
   );
   return /* @__PURE__ */ jsx(AuthContext.Provider, { value: contextValue, children });
 }
-
-// src/client/use-auth.ts
-import { useContext } from "react";
 function useAuth() {
   const context = useContext(AuthContext);
   if (context === null)
@@ -82,6 +87,7 @@ function useAuth() {
   return context;
 }
 export {
+  AuthContext,
   AuthProvider,
   useAuth
 };

@@ -1,6 +1,6 @@
 {
   "name": "@waelhabbaldev/next-jwt-auth",
-  "version": "0.1.6-beta",
+  "version": "0.1.11-beta",
   "description": "A secure, lightweight JWT authentication solution for Next.js, providing access and refresh token handling, middleware support, and easy React integration.",
   "main": "dist/index.js",
   "types": "dist/index.d.ts",
@@ -10,18 +10,18 @@
   ],
   "exports": {
     ".": {
+      "types": "./dist/index.d.ts",
       "import": "./dist/index.mjs",
-      "require": "./dist/index.js",
-      "types": "./dist/index.d.ts"
+      "require": "./dist/index.js"
     },
     "./client": {
-      "import": "./dist/client.mjs",
-      "require": "./dist/client.js",
-      "types": "./dist/client.d.ts"
+      "types": "./dist/index.client.d.ts",
+      "import": "./dist/index.client.mjs",
+      "require": "./dist/index.client.js"
     }
   },
   "scripts": {
-    "build": "tsup src/index.ts src/index.client.ts --format cjs,esm --dts",
+    "build": "tsup",
     "prepublishOnly": "rm -rf ./dist && bun run build",
     "typecheck": "bun tsc --noEmit",
     "test": "bun test"

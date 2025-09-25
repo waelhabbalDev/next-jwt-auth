@@ -1,4 +1,5 @@
 "use strict";
+"use client";
 var __create = Object.create;
 var __defProp = Object.defineProperty;
 var __getOwnPropDesc = Object.getOwnPropertyDescriptor;
@@ -27,15 +28,14 @@ var __toESM = (mod, isNodeMode, target) => (target = mod != null ? __create(__ge
 ));
 var __toCommonJS = (mod) => __copyProps(__defProp({}, "__esModule", { value: true }), mod);
 
-// src/index.client.ts
+// src/index.client.tsx
 var index_client_exports = {};
 __export(index_client_exports, {
+  AuthContext: () => AuthContext,
   AuthProvider: () => AuthProvider,
   useAuth: () => useAuth
 });
 module.exports = __toCommonJS(index_client_exports);
-
-// src/client/provider.tsx
 var import_react = require("react");
 var import_swr = __toESM(require("swr"));
 var import_jsx_runtime = require("react/jsx-runtime");
@@ -109,17 +109,15 @@ function AuthProvider({
   );
   return /* @__PURE__ */ (0, import_jsx_runtime.jsx)(AuthContext.Provider, { value: contextValue, children });
 }
-
-// src/client/use-auth.ts
-var import_react2 = require("react");
 function useAuth() {
-  const context = (0, import_react2.useContext)(AuthContext);
+  const context = (0, import_react.useContext)(AuthContext);
   if (context === null)
     throw new Error("useAuth must be used within an AuthProvider");
   return context;
 }
 // Annotate the CommonJS export names for ESM import in node:
 0 && (module.exports = {
+  AuthContext,
   AuthProvider,
   useAuth
 });

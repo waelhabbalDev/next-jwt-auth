@@ -1,7 +1,7 @@
 import * as react_jsx_runtime from 'react/jsx-runtime';
 import React from 'react';
 import { SWRResponse } from 'swr';
-import { U as UserIdentity, A as AuthSession, P as PublicUserIdentity, c as AuthError } from './errors-kpDWGww1.js';
+import { U as UserIdentity, P as PublicUserIdentity, A as AuthSession, c as AuthError } from './errors-kpDWGww1.js';
 
 type SignInFunction<T extends UserIdentity> = (signInIdentifier: string, secret: string) => Promise<PublicUserIdentity<T> | null>;
 type SignOutFunction = () => Promise<void>;
@@ -24,7 +24,6 @@ interface AuthProviderProps<T extends UserIdentity> {
     signOutAction: SignOutFunction;
 }
 declare function AuthProvider<T extends UserIdentity>({ children, initialSession, sessionFetcher, signInAction, signOutAction, }: AuthProviderProps<T>): react_jsx_runtime.JSX.Element;
-
 declare function useAuth<T extends UserIdentity>(): AuthContextType<T>;
 
 export { AuthContext, type AuthContextType, AuthProvider, type SignInFunction, type SignOutFunction, useAuth };

@@ -1,10 +1,10 @@
 // src/index.ts
 import { NextResponse } from "next/server";
 
-// src/server/authentication.ts
+// src/authentication.ts
 import { cookies } from "next/headers";
 
-// src/core/tokens.ts
+// src/tokens.ts
 import { SignJWT, jwtVerify } from "jose";
 import { v4 as uuidv4 } from "uuid";
 var getSecretKey = (secret) => new TextEncoder().encode(secret);
@@ -49,7 +49,7 @@ async function verifyRefreshToken(token, secret) {
   }
 }
 
-// src/core/cookies.ts
+// src/cookies.ts
 var isProduction = process.env.NODE_ENV === "production";
 var baseCookieConfig = {
   httpOnly: true,
@@ -82,7 +82,7 @@ var getClearRefreshCookie = (name) => ({
   maxAge: -1
 });
 
-// src/core/errors.ts
+// src/errors.ts
 var AuthError = class extends Error {
   constructor(message) {
     super(message);
@@ -102,7 +102,7 @@ var IdentityForbiddenError = class extends AuthError {
   }
 };
 
-// src/server/authentication.ts
+// src/authentication.ts
 async function issueAndSetTokens(identity, config) {
   const { secrets, cookies: cookieConfig, jwt } = config;
   const accessToken = await issueAccessToken(
