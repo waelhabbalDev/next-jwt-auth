@@ -40,9 +40,9 @@
   "icon": "icons/icon.png",
   "license": "MIT",
   "dependencies": {
-    "jose": "^4.17.0",
-    "swr": "^2.1.0",
-    "uuid": "^9.0.0"
+    "jose": "^6.1.0",
+    "swr": "^2.3.6",
+    "uuid": "^13.0.0"
   },
   "peerDependencies": {
     "next": "^14.0.0",
