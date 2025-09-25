@@ -1,6 +1,6 @@
 {
   "name": "@waelhabbaldev/next-jwt-auth",
-  "version": "0.0.1",
+  "version": "0.1.0-beta.0",
   "description": "A secure, lightweight JWT authentication solution for Next.js, providing access and refresh token handling, middleware support, and easy React integration.",
   "main": "dist/index.js",
   "types": "dist/index.d.ts",
@@ -31,12 +31,12 @@
   "author": "Wael Habbal <wael.habbal.dev@gmail.com>",
   "repository": {
     "type": "git",
-    "url": ""
+    "url": "git+https://github.com/waelhabbalDev/next-jwt-auth.git"
   },
+  "homepage": "https://github.com/waelhabbalDev/next-jwt-auth#readme",
   "bugs": {
-    "url": ""
+    "url": "https://github.com/waelhabbalDev/next-jwt-auth/issues"
   },
-  "homepage": "",
   "license": "MIT",
   "dependencies": {
     "jose": "^4.17.0",
