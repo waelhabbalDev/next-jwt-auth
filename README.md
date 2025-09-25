@@ -4,7 +4,7 @@
 [![NPM Version](https://img.shields.io/npm/v/@waelhabbaldev/next-jwt-auth.svg)](https://www.npmjs.com/package/@waelhabbaldev/next-jwt-auth)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 
-<img src="icons/icon.svg" style="background-color: white; display: block; margin:0 auto 1rem;" alt="Nextjs JWT Auth" width="256" height="256">
+<img src="icons/icon.svg" alt="Nextjs JWT Auth" width="256" height="256">
 
 **Next.js JWT Authentication Made Easy**
 A lightweight, secure, and performance-optimized authentication library for Next.js using JWT access and refresh tokens. Supports token rotation, secure cookie storage, middleware integration, and React hooks for seamless client-side session management.
