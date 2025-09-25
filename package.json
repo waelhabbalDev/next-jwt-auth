@@ -1,0 +1,57 @@
+{
+  "name": "@waelhabbaldev/next-jwt-auth",
+  "version": "0.0.1",
+  "description": "A secure, lightweight JWT authentication solution for Next.js, providing access and refresh token handling, middleware support, and easy React integration.",
+  "main": "dist/index.js",
+  "types": "dist/index.d.ts",
+  "files": [
+    "dist",
+    "src"
+  ],
+  "scripts": {
+    "build": "tsc",
+    "prepublishOnly": "rm -rf ./dist && bun run build",
+    "typecheck": "bun tsc --noEmit",
+    "test": "bun test"
+  },
+  "keywords": [
+    "nextjs",
+    "jwt",
+    "authentication",
+    "auth",
+    "access-token",
+    "refresh-token",
+    "secure-sessions",
+    "middleware",
+    "react-hooks",
+    "next-auth",
+    "token-rotation",
+    "nextjs-auth"
+  ],
+  "author": "Wael Habbal <wael.habbal.dev@gmail.com>",
+  "repository": {
+    "type": "git",
+    "url": ""
+  },
+  "bugs": {
+    "url": ""
+  },
+  "homepage": "",
+  "license": "MIT",
+  "dependencies": {
+    "jose": "^4.17.0",
+    "swr": "^2.1.0",
+    "uuid": "^9.0.0"
+  },
+  "peerDependencies": {
+    "next": "^14.0.0",
+    "react": "^18.0.0"
+  },
+  "devDependencies": {
+    "@types/node": "^20.5.6",
+    "@types/react": "^18.2.15",
+    "typescript": "^5.2.2",
+    "eslint": "^8.48.0",
+    "eslint-config-next": "^14.6.0"
+  }
+}
