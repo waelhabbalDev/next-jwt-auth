@@ -1,63 +1,23 @@
-"use strict";
-var __create = Object.create;
-var __defProp = Object.defineProperty;
-var __getOwnPropDesc = Object.getOwnPropertyDescriptor;
-var __getOwnPropNames = Object.getOwnPropertyNames;
-var __getProtoOf = Object.getPrototypeOf;
-var __hasOwnProp = Object.prototype.hasOwnProperty;
-var __export = (target, all) => {
-  for (var name in all)
-    __defProp(target, name, { get: all[name], enumerable: true });
-};
-var __copyProps = (to, from, except, desc) => {
-  if (from && typeof from === "object" || typeof from === "function") {
-    for (let key of __getOwnPropNames(from))
-      if (!__hasOwnProp.call(to, key) && key !== except)
-        __defProp(to, key, { get: () => from[key], enumerable: !(desc = __getOwnPropDesc(from, key)) || desc.enumerable });
-  }
-  return to;
-};
-var __toESM = (mod, isNodeMode, target) => (target = mod != null ? __create(__getProtoOf(mod)) : {}, __copyProps(
-  // If the importer is in node compatibility mode or this is not an ESM
-  // file that has been converted to a CommonJS file using a Babel-
-  // compatible transform (i.e. "__esModule" has not been set), then set
-  // "default" to the CommonJS "module.exports" for node compatibility.
-  isNodeMode || !mod || !mod.__esModule ? __defProp(target, "default", { value: mod, enumerable: true }) : target,
-  mod
-));
-var __toCommonJS = (mod) => __copyProps(__defProp({}, "__esModule", { value: true }), mod);
-
 // src/index.ts
-var src_exports = {};
-__export(src_exports, {
-  AuthError: () => AuthError,
-  AuthProvider: () => AuthProvider,
-  IdentityForbiddenError: () => IdentityForbiddenError,
-  InvalidCredentialsError: () => InvalidCredentialsError,
-  createAuth: () => createAuth,
-  useAuth: () => useAuth,
-  verifyAccessToken: () => verifyAccessToken
-});
-module.exports = __toCommonJS(src_exports);
-var import_server = require("next/server");
+import { NextResponse } from "next/server";
 
 // src/server/authentication.ts
-var import_headers = require("next/headers");
+import { cookies } from "next/headers";
 
 // src/core/tokens.ts
-var import_jose = require("jose");
-var import_uuid = require("uuid");
+import { SignJWT, jwtVerify } from "jose";
+import { v4 as uuidv4 } from "uuid";
 var getSecretKey = (secret) => new TextEncoder().encode(secret);
 async function issueAccessToken(identity, secret, expiresIn, jwtOptions) {
   const { version, isForbidden, ...payload } = identity;
-  let jwt = new import_jose.SignJWT(payload).setProtectedHeader({ alg: "HS256" }).setIssuedAt().setSubject(identity.identifier).setExpirationTime(`${expiresIn}s`);
+  let jwt = new SignJWT(payload).setProtectedHeader({ alg: "HS256" }).setIssuedAt().setSubject(identity.identifier).setExpirationTime(`${expiresIn}s`);
   if (jwtOptions?.issuer) jwt = jwt.setIssuer(jwtOptions.issuer);
   if (jwtOptions?.audience) jwt = jwt.setAudience(jwtOptions.audience);
   return jwt.sign(getSecretKey(secret));
 }
 async function verifyAccessToken(token, secret) {
   try {
-    const { payload } = await (0, import_jose.jwtVerify)(
+    const { payload } = await jwtVerify(
       token,
       getSecretKey(secret)
     );
@@ -70,16 +30,16 @@ async function issueRefreshToken(identity, secret, expiresIn, jwtOptions) {
   const payload = {
     identifier: identity.identifier,
     version: identity.version,
-    jti: (0, import_uuid.v4)()
+    jti: uuidv4()
   };
-  let jwt = new import_jose.SignJWT(payload).setProtectedHeader({ alg: "HS256" }).setIssuedAt().setSubject(identity.identifier).setExpirationTime(`${expiresIn}s`);
+  let jwt = new SignJWT(payload).setProtectedHeader({ alg: "HS256" }).setIssuedAt().setSubject(identity.identifier).setExpirationTime(`${expiresIn}s`);
   if (jwtOptions?.issuer) jwt = jwt.setIssuer(jwtOptions.issuer);
   if (jwtOptions?.audience) jwt = jwt.setAudience(jwtOptions.audience);
   return jwt.sign(getSecretKey(secret));
 }
 async function verifyRefreshToken(token, secret) {
   try {
-    const { payload } = await (0, import_jose.jwtVerify)(
+    const { payload } = await jwtVerify(
       token,
       getSecretKey(secret)
     );
@@ -157,7 +117,7 @@ async function issueAndSetTokens(identity, config) {
     cookieConfig.refresh.maxAge,
     jwt
   );
-  const cookieStore = await (0, import_headers.cookies)();
+  const cookieStore = await cookies();
   cookieStore.set(
     getAccessCookie(
       accessToken,
@@ -186,7 +146,7 @@ async function signIn(signInIdentifier, secret, config) {
   return publicIdentity;
 }
 async function signOut(config) {
-  const cookieStore = await (0, import_headers.cookies)();
+  const cookieStore = await cookies();
   const refreshTokenValue = cookieStore.get(config.cookies.refresh.name)?.value;
   cookieStore.set(getClearAccessCookie(config.cookies.access.name));
   cookieStore.set(getClearRefreshCookie(config.cookies.refresh.name));
@@ -200,7 +160,7 @@ async function signOut(config) {
   await config.dal.invalidateAllSessionsForIdentity(identifier);
 }
 async function getAuthSession(config, req) {
-  const cookieStore = req ? req.cookies : await (0, import_headers.cookies)();
+  const cookieStore = req ? req.cookies : await cookies();
   const refreshTokenValue = cookieStore.get(config.cookies.refresh.name)?.value;
   if (!refreshTokenValue) return { session: null };
   const verifiedRefresh = await verifyRefreshToken(
@@ -248,13 +208,13 @@ async function getAuthSession(config, req) {
 }
 
 // src/index.ts
-var import_headers2 = require("next/headers");
+import { cookies as cookies2 } from "next/headers";
 
 // src/client/provider.tsx
-var import_react = require("react");
-var import_swr = __toESM(require("swr"));
-var import_jsx_runtime = require("react/jsx-runtime");
-var AuthContext = (0, import_react.createContext)(null);
+import { createContext, useMemo, useCallback, useState } from "react";
+import useSWR from "swr";
+import { jsx } from "react/jsx-runtime";
+var AuthContext = createContext(null);
 function AuthProvider({
   children,
   initialSession,
@@ -267,7 +227,7 @@ function AuthProvider({
     isLoading,
     mutate,
     error: swrError
-  } = (0, import_swr.default)(
+  } = useSWR(
     "auth-session-key",
     sessionFetcher,
     {
@@ -277,8 +237,8 @@ function AuthProvider({
       shouldRetryOnError: false
     }
   );
-  const [actionError, setActionError] = (0, import_react.useState)(null);
-  const handleSignIn = (0, import_react.useCallback)(
+  const [actionError, setActionError] = useState(null);
+  const handleSignIn = useCallback(
     async (signInIdentifier, secret) => {
       setActionError(null);
       try {
@@ -292,7 +252,7 @@ function AuthProvider({
     },
     [signInAction, mutate]
   );
-  const handleSignOut = (0, import_react.useCallback)(async () => {
+  const handleSignOut = useCallback(async () => {
     setActionError(null);
     try {
       await signOutAction();
@@ -301,7 +261,7 @@ function AuthProvider({
       setActionError(err);
     }
   }, [signOutAction, mutate]);
-  const contextValue = (0, import_react.useMemo)(
+  const contextValue = useMemo(
     () => ({
       session,
       identity: session?.identity ?? null,
@@ -322,13 +282,13 @@ function AuthProvider({
       swrError
     ]
   );
-  return /* @__PURE__ */ (0, import_jsx_runtime.jsx)(AuthContext.Provider, { value: contextValue, children });
+  return /* @__PURE__ */ jsx(AuthContext.Provider, { value: contextValue, children });
 }
 
 // src/client/use-auth.ts
-var import_react2 = require("react");
+import { useContext } from "react";
 function useAuth() {
-  const context = (0, import_react2.useContext)(AuthContext);
+  const context = useContext(AuthContext);
   if (context === null)
     throw new Error("useAuth must be used within an AuthProvider");
   return context;
@@ -355,7 +315,7 @@ function createAuth(config) {
       effectiveConfig
     );
     if (newTokens) {
-      const cookieStore = await (0, import_headers2.cookies)();
+      const cookieStore = await cookies2();
       if (!newTokens.accessToken) {
         cookieStore.set(
           getClearAccessCookie(effectiveConfig.cookies.access.name)
@@ -387,9 +347,9 @@ function createAuth(config) {
   const signOut2 = () => signOut(effectiveConfig);
   const createAuthMiddleware = (matcher = () => true) => {
     return async (req) => {
-      if (!matcher(req)) return import_server.NextResponse.next();
+      if (!matcher(req)) return NextResponse.next();
       const { newTokens } = await getAuthSession(effectiveConfig, req);
-      const response = import_server.NextResponse.next();
+      const response = NextResponse.next();
       if (newTokens) {
         if (!newTokens.accessToken) {
           response.cookies.set(
@@ -421,8 +381,7 @@ function createAuth(config) {
   };
   return { getAuthSession: getAuthSession2, signIn: signIn2, signOut: signOut2, createAuthMiddleware };
 }
-// Annotate the CommonJS export names for ESM import in node:
-0 && (module.exports = {
+export {
   AuthError,
   AuthProvider,
   IdentityForbiddenError,
@@ -430,4 +389,4 @@ function createAuth(config) {
   createAuth,
   useAuth,
   verifyAccessToken
-});
+};
