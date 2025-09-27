@@ -1,5 +1,7 @@
 // src/index.ts
 import { NextResponse } from "next/server";
+import { cookies as cookies2, headers } from "next/headers";
+import { redirect } from "next/navigation";
 
 // src/authentication.ts
 import { cookies } from "next/headers";
@@ -99,6 +101,18 @@ var IdentityForbiddenError = class extends AuthError {
   constructor() {
     super("This identity is forbidden from logging in.");
     this.name = "IdentityForbiddenError";
+  }
+};
+var NotAuthenticatedError = class extends AuthError {
+  constructor() {
+    super("Not authenticated.");
+    this.name = "NotAuthenticatedError";
+  }
+};
+var ForbiddenError = class extends AuthError {
+  constructor(message = "Forbidden: You do not have the required permissions.") {
+    super(message);
+    this.name = "ForbiddenError";
   }
 };
 
@@ -207,22 +221,78 @@ async function getAuthSession(config, req) {
   };
 }
 
+// src/utils.ts
+function validateAndSanitizeBaseUrl(url) {
+  if (typeof url !== "string" || url.length === 0) {
+    throw new Error(
+      "Auth configuration error: `baseUrl` is required and must be a non-empty string."
+    );
+  }
+  try {
+    const urlObject = new URL(url);
+    if (urlObject.pathname !== "/" && urlObject.pathname !== "") {
+      throw new Error(
+        `Auth configuration error: \`baseUrl\` ("${url}") must not contain a path. Please provide the origin only (e.g., "https://example.com").`
+      );
+    }
+    if (urlObject.search !== "") {
+      throw new Error(
+        `Auth configuration error: \`baseUrl\` ("${url}") must not contain query parameters.`
+      );
+    }
+    if (urlObject.hash !== "") {
+      throw new Error(
+        `Auth configuration error: \`baseUrl\` ("${url}") must not contain a fragment hash.`
+      );
+    }
+    return urlObject.origin;
+  } catch (error) {
+    if (error instanceof TypeError) {
+      throw new Error(
+        `Auth configuration error: Invalid \`baseUrl\` provided ("${url}"). It must be an absolute URL (e.g., "https://example.com").`
+      );
+    }
+    throw error;
+  }
+}
+function sanitizeRedirectPath(pathname) {
+  if (!pathname || typeof pathname !== "string") {
+    return "/";
+  }
+  if (pathname.startsWith("/") && !pathname.startsWith("//") && !pathname.startsWith("/\\")) {
+    return pathname;
+  }
+  return "/";
+}
+
 // src/index.ts
-import { cookies as cookies2 } from "next/headers";
+var HEADER_PATHNAME_KEY = "x-auth-pathname";
 function createAuth(config) {
-  if (config.secrets.accessTokenSecret.length < 32)
+  if (!config.secrets.accessTokenSecret || config.secrets.accessTokenSecret.length < 32)
     throw new Error(
-      "Access token secret must be at least 32 characters long for security."
+      "Auth configuration error: Access token secret must be at least 32 characters long."
     );
-  if (config.secrets.refreshTokenSecret.length < 32)
+  if (!config.secrets.refreshTokenSecret || config.secrets.refreshTokenSecret.length < 32)
     throw new Error(
-      "Refresh token secret must be at least 32 characters long for security."
+      "Auth configuration error: Refresh token secret must be at least 32 characters long."
     );
-  if (config.cookies.access.maxAge <= 0 || config.cookies.refresh.maxAge <= 0)
-    throw new Error("Cookie maxAge must be positive numbers.");
+  if (!config.cookies.access.maxAge || config.cookies.access.maxAge <= 0 || !config.cookies.refresh.maxAge || config.cookies.refresh.maxAge <= 0)
+    throw new Error(
+      "Auth configuration error: Cookie maxAge must be a positive number of seconds."
+    );
+  if (!config.redirects.unauthenticated)
+    throw new Error(
+      "Auth configuration error: `redirects.unauthenticated` path is required."
+    );
+  const validatedBaseUrl = validateAndSanitizeBaseUrl(config.baseUrl);
   const effectiveConfig = {
     ...config,
-    rotationStrategy: config.rotationStrategy ?? "always"
+    baseUrl: validatedBaseUrl,
+    rotationStrategy: config.rotationStrategy ?? "always",
+    redirects: {
+      unauthenticated: config.redirects.unauthenticated,
+      forbidden: config.redirects.forbidden || config.redirects.unauthenticated
+    }
   };
   const getAuthSession2 = async () => {
     const { session, newTokens } = await getAuthSession(
@@ -245,7 +315,7 @@ function createAuth(config) {
             effectiveConfig.cookies.access.maxAge
           )
         );
-        if (newTokens.refreshToken)
+        if (newTokens.refreshToken) {
           cookieStore.set(
             getRefreshCookie(
               newTokens.refreshToken,
@@ -253,6 +323,7 @@ function createAuth(config) {
               effectiveConfig.cookies.refresh.maxAge
             )
           );
+        }
       }
     }
     return session;
@@ -262,8 +333,12 @@ function createAuth(config) {
   const createAuthMiddleware = (matcher = () => true) => {
     return async (req) => {
       if (!matcher(req)) return NextResponse.next();
+      const requestHeaders = new Headers(req.headers);
+      requestHeaders.set(HEADER_PATHNAME_KEY, req.nextUrl.pathname);
       const { newTokens } = await getAuthSession(effectiveConfig, req);
-      const response = NextResponse.next();
+      const response = NextResponse.next({
+        request: { headers: requestHeaders }
+      });
       if (newTokens) {
         if (!newTokens.accessToken) {
           response.cookies.set(
@@ -280,7 +355,7 @@ function createAuth(config) {
               effectiveConfig.cookies.access.maxAge
             )
           );
-          if (newTokens.refreshToken)
+          if (newTokens.refreshToken) {
             response.cookies.set(
               getRefreshCookie(
                 newTokens.refreshToken,
@@ -288,17 +363,104 @@ function createAuth(config) {
                 effectiveConfig.cookies.refresh.maxAge
               )
             );
+          }
         }
       }
       return response;
     };
   };
-  return { getAuthSession: getAuthSession2, signIn: signIn2, signOut: signOut2, createAuthMiddleware };
+  const buildRedirectUrl = async (targetPath, params = {}) => {
+    const headersList = await headers();
+    const rawPathname = headersList.get(HEADER_PATHNAME_KEY);
+    const currentPath = sanitizeRedirectPath(rawPathname);
+    const url = new URL(targetPath, effectiveConfig.baseUrl);
+    if (targetPath === effectiveConfig.redirects.unauthenticated) {
+      url.searchParams.set("callbackUrl", currentPath);
+    }
+    for (const [key, value] of Object.entries(params)) {
+      url.searchParams.set(key, value);
+    }
+    return `${url.pathname}${url.search}`;
+  };
+  const protectPage = async (options) => {
+    const { session } = await getAuthSession(effectiveConfig);
+    if (!session) {
+      const redirectPath = await buildRedirectUrl(
+        options?.unauthenticatedRedirect || effectiveConfig.redirects.unauthenticated,
+        options?.redirectParams
+      );
+      redirect(redirectPath);
+    }
+    if (options?.authorize) {
+      const isAuthorized = await options.authorize(
+        session.identity,
+        options.context
+      );
+      if (!isAuthorized) {
+        const redirectPath = await buildRedirectUrl(
+          options?.forbiddenRedirect || effectiveConfig.redirects.forbidden,
+          options?.redirectParams
+        );
+        redirect(redirectPath);
+      }
+    }
+    return session;
+  };
+  const protectAction = async (options) => {
+    const { session } = await getAuthSession(effectiveConfig);
+    if (!session) {
+      throw new NotAuthenticatedError();
+    }
+    if (options?.authorize) {
+      const isAuthorized = await options.authorize(
+        session.identity,
+        options.context
+      );
+      if (!isAuthorized) {
+        throw new ForbiddenError();
+      }
+    }
+    return session;
+  };
+  const protectApi = async (options) => {
+    const { session } = await getAuthSession(effectiveConfig);
+    if (!session) {
+      return {
+        response: NextResponse.json(
+          { error: "Not authenticated" },
+          { status: 401 }
+        )
+      };
+    }
+    if (options?.authorize) {
+      const isAuthorized = await options.authorize(
+        session.identity,
+        options.context
+      );
+      if (!isAuthorized) {
+        return {
+          response: NextResponse.json({ error: "Forbidden" }, { status: 403 })
+        };
+      }
+    }
+    return { session };
+  };
+  return {
+    getAuthSession: getAuthSession2,
+    signIn: signIn2,
+    signOut: signOut2,
+    createAuthMiddleware,
+    protectPage,
+    protectAction,
+    protectApi
+  };
 }
 export {
   AuthError,
+  ForbiddenError,
   IdentityForbiddenError,
   InvalidCredentialsError,
+  NotAuthenticatedError,
   createAuth,
   verifyAccessToken
 };

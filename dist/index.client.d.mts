@@ -1,7 +1,7 @@
 import * as react_jsx_runtime from 'react/jsx-runtime';
 import React from 'react';
 import { SWRResponse } from 'swr';
-import { U as UserIdentity, P as PublicUserIdentity, A as AuthSession, c as AuthError } from './errors-kpDWGww1.mjs';
+import { U as UserIdentity, P as PublicUserIdentity, A as AuthSession, c as AuthError } from './errors-DznFvHN8.mjs';
 
 type SignInFunction<T extends UserIdentity> = (signInIdentifier: string, secret: string) => Promise<PublicUserIdentity<T> | null>;
 type SignOutFunction = () => Promise<void>;

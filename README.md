@@ -7,18 +7,20 @@
   <img src="icons/icon.svg" alt="Next.js JWT Auth" width="256" height="256">
 </div>
 
-<h3 align="center">Next.js JWT Authentication Made Easy</h3>
+<h3 align="center">Declarative, Secure Authentication for Next.js 14+</h3>
 
-A lightweight, secure, and performance-optimized authentication library for Next.js 14+ (App Router). It implements a robust security model using JWT access and refresh tokens with automatic token rotation and reuse detection.
+A lightweight, secure, and performance-optimized authentication library for the Next.js App Router. It implements a robust security model using JWT access/refresh tokens and provides a simple, declarative API to protect your pages, server actions, and API routes.
 
 ---
 
 ## Features
 
 *   **State-of-the-Art Security:** Automatic Refresh Token Rotation and Reuse Detection to protect against token theft.
-*   **Secure Cookie Storage:** Tokens are stored in `HttpOnly`, `Secure`, and `SameSite=Strict` cookies.
-*   **Next.js 14+ Ready:** Built for the App Router. Works seamlessly with Server Components, Server Actions, Route Handlers, and Middleware.
-*   **Type-Safe Hooks:** Generic React Hooks (`useAuth`) and Context (`AuthProvider`) for simple, type-safe client-side session management.
+*   **Declarative Protection Guards:** Secure your application with a single line of code. Use `auth.protectPage()`, `auth.protectAction()`, and `auth.protectApi()` to enforce authentication and authorization rules effortlessly.
+*   **Flexible Authorization:** Implement role-based (RBAC) or ownership-based (ABAC) access control with a simple `authorize` callback in the protection guards.
+*   **Secure Cookie Storage:** Tokens are stored in `HttpOnly`, `Secure`, and `SameSite=Strict` cookies to protect against XSS and CSRF.
+*   **Next.js 14+ Ready:** Built for the App Router. Works seamlessly with Server Components, Server Actions, API Route Handlers, and Middleware.
+*   **Type-Safe Client Hooks:** Generic React Hooks (`useAuth`) for simple, type-safe client-side session management powered by SWR.
 *   **DAL Agnostic:** Plug in your own database logic (Prisma, Drizzle, etc.) via a simple `UserIdentityDAL` interface.
 *   **Session Versioning:** Instantly invalidate all of a user's sessions from the server-side (e.g., after a password change).
 
@@ -38,10 +40,10 @@ yarn add @waelhabbalDev/next-jwt-auth
 
 ## Database Schema Requirements
 
-To use all security features of this library, your database schema must include the following:
+Your database needs two tables to support all security features.
 
-### 1. Users Table
-Your users table needs a numeric column to handle session invalidation. We recommend `tokenVersion`.
+#### 1. `users` Table
+Must include `tokenVersion` (for session invalidation) and `isForbidden` (for banning).
 
 ```sql
 CREATE TABLE `users` (
@@ -50,20 +52,18 @@ CREATE TABLE `users` (
   `isForbidden` BOOLEAN NOT NULL DEFAULT FALSE
 );
 ```
--   **`tokenVersion`**: When you want to invalidate all sessions for a user (e.g., after a password change), simply increment this value. Any refresh token with an older version number will be rejected.
--   **`isForbidden`**: A boolean to easily ban or suspend a user account.
 
-### 2. Used Refresh Tokens Table
-To enable refresh token reuse detection, you need a table to store the JTI (JWT ID) of used refresh tokens.
+#### 2. `usedRefreshToken` Table
+Required for refresh token reuse detection.
 
 ```sql
-CREATE TABLE `used_refresh_token_jtis` (
+CREATE TABLE `usedRefreshToken` (
     `jti` VARCHAR(36) NOT NULL,
     `expiresAt` TIMESTAMP NOT NULL,
     PRIMARY KEY (`jti`)
 );
 ```
--   **Why?** When a refresh token is used, its unique `jti` is stored here. If the same token is used again (a sign it may have been stolen), the system detects it, rejects the request, and invalidates all sessions for that user. You should run a scheduled job to clean up expired JTIs from this table.
+**Note:** You should run a scheduled job (e.g., a cron job) to periodically delete expired JTIs from this table to keep it clean.
 
 ---
 
@@ -71,20 +71,18 @@ CREATE TABLE `used_refresh_token_jtis` (
 
 ### 1. Define your User Identity and DAL
 
-First, define a type for your user's identity that extends the base `UserIdentity`.
+Define a type for your user's identity and implement the `UserIdentityDAL` interface to connect the library to your database.
 
 ```ts
 // src/lib/auth.types.ts
 import type { UserIdentity } from "@waelhabbalDev/next-jwt-auth";
 
 export interface AppUserIdentity extends UserIdentity {
-  // identifier, roles, version, isForbidden are required by the base type
   fullName: string | null;
   email: string;
+  // You can add any other public user properties here
 }
 ```
-
-Next, implement the Data Access Layer (DAL) to connect the library to your database.
 
 ```ts
 // src/lib/dal.ts
@@ -93,92 +91,62 @@ import { AppUserIdentity } from "./auth.types";
 import db from "./db"; // Your database client (e.g., Prisma)
 
 export const dal: UserIdentityDAL<AppUserIdentity> = {
-  fetchIdentityByCredentials: async (email, password) => {
-    const user = await db.users.findUserForAuth(email, password);
-    if (!user) return null;
-    return {
-      identifier: user.userId,
-      fullName: user.fullName,
-      email: user.email,
-      roles: [user.role], // roles must be an array of strings
-      version: user.tokenVersion,
-      isForbidden: user.isForbidden,
-    };
-  },
-  fetchIdentityForSession: async (identifier) => {
-    // Fetches user by ID for session validation and token refresh
-    const user = await db.users.findUserForSession(identifier);
-    if (!user) return null;
-    // ... map user to AppUserIdentity ... 
-    return {
-      identifier: user.userId,
-      fullName: user.fullName,
-      email: user.email,
-      roles: [user.role],
-      version: user.tokenVersion,
-      isForbidden: user.isForbidden,
-    };
-  },
-  invalidateAllSessionsForIdentity: async (identifier) => {
-    // Increments the user's `tokenVersion` in the DB
-    await db.users.incrementTokenVersion(identifier);
-  },
-  isTokenJtiUsed: async (jti) => {
-    // Check if the JTI exists in your `used_refresh_token_jtis` table
-    return await db.jtis.isTokenJtiUsed(jti);
-  },
-  markTokenJtiAsUsed: async (jti, expiration) => {
-    // Add the JTI to your `used_refresh_token_jtis` table with an expiry
-    await db.jtis.markTokenJtiAsUsed(jti, expiration);
-  },
+  // Implement all 5 DAL methods here...
+  // fetchIdentityByCredentials, fetchIdentityForSession, etc.
 };
 ```
 
 ### 2. Configure and Export the Auth Instance
 
-Create a central file to configure and export your `auth` object.
+Create a central file (`src/lib/auth.ts`) to configure and export your `auth` object. This is the single source of truth for your authentication system.
 
 ```ts
 // src/lib/auth.ts
 import { createAuth } from "@waelhabbalDev/next-jwt-auth";
 import { dal } from "./dal";
+import { AppUserIdentity } from "./auth.types";
 
-export const auth = createAuth({
+export const auth = createAuth<AppUserIdentity>({
   dal,
+  // Your application's fully-qualified base URL
+  baseUrl: process.env.BASE_URL!, 
+  
   secrets: {
     accessTokenSecret: process.env.ACCESS_TOKEN_SECRET!,
     refreshTokenSecret: process.env.REFRESH_TOKEN_SECRET!,
   },
+  
   cookies: {
     access: { name: "auth-access-token", maxAge: 15 * 60 },       // 15 minutes
     refresh: { name: "auth-refresh-token", maxAge: 7 * 24 * 60 * 60 }, // 7 days
   },
-  rotationStrategy: "always", // "always" is recommended for max security
+
+  // Paths to redirect users to on authentication/authorization failure
+  redirects: {
+    unauthenticated: "/signin",
+    forbidden: "/unauthorized", // Optional: fallback to unauthenticated if not set
+  },
 });
 ```
 
-### 3. Set Up Middleware for Token Refresh
+### 3. Set Up Middleware
 
-The middleware is crucial for keeping the user's session alive by refreshing tokens automatically.
+The middleware handles automatic token refreshing.
 
 ```ts
 // middleware.ts
-import { type NextRequest } from "next/server";
 import { auth } from "@/lib/auth";
 
-// The auth middleware handles token refreshing.
-// You can chain it with other middlewares (e.g., for localization or authorization).
 export default auth.createAuthMiddleware();
 
 export const config = {
-  // Match all paths except for static assets and API routes.
   matcher: ["/((?!api|_next/static|_next/image|favicon.ico).*)"],
 };
 ```
 
-### 4. Wrap Your App in the `AuthProvider`
+### 4. Set up the Client-Side Provider
 
-Create an API route for the session and wrap your application in the provider.
+Create a session API endpoint and wrap your application in the `AuthProvider`.
 
 ```ts
 // app/api/auth/session/route.ts
@@ -186,7 +154,7 @@ import { auth } from "@/lib/auth";
 import { NextResponse } from "next/server";
 
 export async function GET() {
-  const session = await auth.getAuthSession(); // Handles refresh
+  const session = await auth.getAuthSession();
   return NextResponse.json(session);
 }
 ```
@@ -194,14 +162,14 @@ export async function GET() {
 ```tsx
 // app/providers.tsx
 "use client";
-import { AuthProvider } from "@waelhabbalDev/next-jwt-auth";
-import { signInAction, signOutAction } from "@/app/actions/authActions"; // Your server actions
+import { AuthProvider } from "@waelhabbalDev/next-jwt-auth/client";
+import { signInAction, signOutAction } from "@/app/actions/authActions";
 
-export function Providers({ children }) {
+export function Providers({ children }: { children: React.ReactNode }) {
   return (
     <AuthProvider
       sessionFetcher={() => fetch("/api/auth/session").then((res) => res.json())}
-      signInAction={signInAction} // Pass the server action directly
+      signInAction={signInAction}
       signOutAction={signOutAction}
     >
       {children}
@@ -210,52 +178,119 @@ export function Providers({ children }) {
 }
 ```
 
-```tsx
-// app/layout.tsx
-import { Providers } from "./providers";
+Wrap your `RootLayout`'s children with `<Providers>`.
 
-export default function RootLayout({ children }) {
-  return (
-    <html>
-      <body>
-        <Providers>{children}</Providers>
-      </body>
-    </html>
-  );
-}
-```
+---
 
-### 5. Use the Session
+## Protecting Your Application
 
-Now you can access the session anywhere in your app.
+This library provides declarative guards to easily protect your application at every level.
+
+### Protecting Pages (Server Components)
+
+Use `auth.protectPage()` at the beginning of any page or layout. It guarantees that the user is authenticated, or it redirects them.
 
 ```tsx
-// Server Component
+// app/dashboard/page.tsx
 import { auth } from "@/lib/auth";
 
-async function MyServerComponent() {
-  const session = await auth.getAuthSession();
-  if (!session) return <p>Not authenticated</p>;
-  return <p>Welcome, {session.identity.fullName}</p>;
+export default async function DashboardPage() {
+  // If the user is not logged in, they will be redirected to "/signin".
+  // The session object is guaranteed to be available.
+  const session = await auth.protectPage();
+
+  return <h1>Welcome, {session.identity.fullName}</h1>;
 }
 ```
 
+You can also enforce roles and other authorization rules.
+
 ```tsx
-// Client Component
+// app/admin/page.tsx
+import { auth } from "@/lib/auth";
+
+export default async function AdminPage() {
+  const session = await auth.protectPage({
+    // If the user is not an admin, they will be redirected to "/unauthorized".
+    authorize: (identity) => identity.roles.includes("admin"),
+    redirectParams: { error: "admin_required" } // Adds ?error=... to the URL
+  });
+
+  return <h2>Admin Panel</h2>;
+}
+```
+
+### Protecting Server Actions
+
+Use `auth.protectAction()` to secure your Server Actions. It throws specific, catchable errors on failure.
+
+```ts
+// app/actions/postActions.ts
+"use server";
+import { auth } from "@/lib/auth";
+import { NotAuthenticatedError, ForbiddenError } from "@waelhabbaldev/next-jwt-auth";
+
+export async function createPostAction(formData: FormData) {
+  try {
+    // Throws NotAuthenticatedError if not logged in.
+    const session = await auth.protectAction();
+
+    // ... your logic here, e.g., create post in DB for session.identity.identifier
+    
+    return { success: true };
+  } catch (error) {
+    if (error instanceof NotAuthenticatedError) {
+      return { success: false, error: "Please sign in to create a post." };
+    }
+    // Handle other errors...
+    return { success: false, error: "An unknown error occurred." };
+  }
+}
+```
+
+### Protecting API Routes
+
+Use `auth.protectApi()` to secure your Route Handlers. It returns a `NextResponse` on failure.
+
+```ts
+// app/api/projects/route.ts
+import { auth } from "@/lib/auth";
+import { NextResponse } from "next/server";
+
+export async function GET() {
+  const { session, response } = await auth.protectApi({
+    authorize: (identity) => identity.roles.includes("project-manager"),
+  });
+
+  // If the guard fails, `response` will be a NextResponse object. Return it.
+  if (response) {
+    return response;
+  }
+
+  // If we reach here, the user is authenticated and authorized.
+  const projects = await db.projects.findByUser(session.identity.identifier);
+  return NextResponse.json(projects);
+}
+```
+
+### Accessing the Session on the Client
+
+Use the `useAuth()` hook in any Client Component.
+
+```tsx
 "use client";
-import { useAuth } from "@waelhabbalDev/next-jwt-auth";
-import { AppUserIdentity } from "@/lib/auth.types"; // Your custom type
+import { useAuth } from "@waelhabbalDev/next-jwt-auth/client";
+import { AppUserIdentity } from "@/lib/auth.types";
 
-function Profile() {
-  // Specify your custom identity type for full type-safety
-  const { identity, signOut, error } = useAuth<AppUserIdentity>();
+function ProfileButton() {
+  const { identity, isLoading, signOut } = useAuth<AppUserIdentity>();
 
-  if (error) return <p>Session error: {error.message}</p>
-  if (!identity) return <p>Please login</p>;
+  if (isLoading) return <div>Loading...</div>;
+  if (!identity) return <a href="/signin">Sign In</a>;
 
   return (
     <div>
-      <h1>Hello, {identity.fullName}</h1>
+      <span>Hello, {identity.fullName}</span>
       <button onClick={signOut}>Logout</button>
     </div>
   );
@@ -266,44 +301,40 @@ function Profile() {
 
 ## API Reference
 
-### `createAuth(config)`
-Creates an authentication instance. See config options above.
-**Returns:** `{ getAuthSession, signIn, signOut, createAuthMiddleware }`
+The `createAuth` function returns an object with the following methods:
 
----
-
-### `getAuthSession()`
-Fetches the current session **for Server Components and Server Actions**. Automatically handles token rotation and sets new cookies. Returns `Promise<AuthSession<T> | null>`.
-
----
-
-### `signIn(identifier, secret)`
-Signs in a user, issues tokens, and sets cookies. Called from a Server Action. Returns the user's public identity.
-
----
-
-### `signOut()`
-Signs out a user, clears cookies, and invalidates the current refresh token family by incrementing the `tokenVersion` in the database.
-
----
-
-### `createAuthMiddleware(matcher?)`
-Creates Next.js middleware that automatically refreshes tokens on navigation for authenticated users, keeping sessions alive. The `matcher` function is optional and defaults to all routes.
+| Method                 | Description                                                                                             |
+| ---------------------- | ------------------------------------------------------------------------------------------------------- |
+| `protectPage()`        | **(Recommended)** Protects Pages/Layouts. Redirects on failure.                                         |
+| `protectAction()`      | **(Recommended)** Protects Server Actions. Throws a catchable error on failure.                         |
+| `protectApi()`         | **(Recommended)** Protects API Routes. Returns a `NextResponse` with a 401/403 status on failure.       |
+| `getAuthSession()`     | Fetches the current session without protection. Returns `null` if not authenticated.                    |
+| `signIn()`             | Signs in a user and sets cookies. Called from a Server Action.                                          |
+| `signOut()`            | Signs out a user, clears cookies, and invalidates the token family.                                     |
+| `createAuthMiddleware()` | Creates Next.js middleware for automatic token refreshing.                                              |
 
 ---
 
 ## Security
-*   **Refresh Token Rotation:** Mitigates damage from a leaked refresh token. When a new access/refresh token pair is issued, the refresh token used is invalidated.
-*   **Reuse Detection:** If a compromised (and already used) refresh token is presented, the library detects it, immediately invalidates **all** active sessions for that user, and logs them out everywhere.
-*   **Secure Cookies:** All tokens are stored in `HttpOnly`, `Secure` (in production), and `SameSite=Strict` cookies to protect against XSS and CSRF attacks.
+
+*   **Refresh Token Rotation & Reuse Detection:** Provides state-of-the-art protection against token theft. If a stolen refresh token is used, all sessions for that user are immediately invalidated.
+*   **Secure Cookies:** All tokens are stored in `HttpOnly`, `Secure`, and `SameSite=Strict` cookies to protect against XSS and CSRF attacks.
+*   **Declarative Guards:** The `protectPage` and `protectAction` guards help prevent common security mistakes by ensuring authentication and authorization checks are always performed.
 
 ---
 
 ## Recommended Environment Variables
 
 ```env
+# A secure, random string of at least 32 characters
 ACCESS_TOKEN_SECRET="your-32+char-secret"
 REFRESH_TOKEN_SECRET="your-32+char-secret"
+
+# The full base URL of your application
+BASE_URL="http://localhost:3000"
+# For Vercel, this can be set automatically:
+# BASE_URL="https://your-domain.com"
+
 NODE_ENV="production"
 ```
 
@@ -311,7 +342,7 @@ NODE_ENV="production"
 
 ## Keywords
 
-`nextjs`, `jwt`, `authentication`, `auth`, `secure-sessions`, `access-token`, `refresh-token`, `middleware`, `react-hooks`, `token-rotation`
+`nextjs`, `authentication`, `authorization`, `jwt`, `auth`, `security`, `session-management`, `access-token`, `refresh-token`, `middleware`, `react-hooks`, `token-rotation`, `nextjs-auth`, `app-router`
 
 ---
 
