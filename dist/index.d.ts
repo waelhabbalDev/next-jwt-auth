@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { U as UserIdentity, P as PublicUserIdentity, a as UserIdentityDAL, A as AuthSession } from './errors-DznFvHN8.js';
-export { b as AuthCookieConfig, c as AuthError, C as CookieOptions, F as ForbiddenError, d as IdentityForbiddenError, I as InvalidCredentialsError, N as NotAuthenticatedError, R as RefreshTokenPayload, T as TokenPair } from './errors-DznFvHN8.js';
+import { U as UserIdentity, P as PublicUserIdentity, a as UserIdentityDAL, A as AuthSession } from './errors-CqxeYHdU.js';
+export { b as AuthCookieConfig, c as AuthError, C as CookieOptions, F as ForbiddenError, d as IdentityForbiddenError, I as InvalidCredentialsError, N as NotAuthenticatedError, R as RefreshTokenPayload, T as TokenPair } from './errors-CqxeYHdU.js';
 
 declare function verifyAccessToken<T extends UserIdentity>(token: string, secret: string): Promise<{
     payload: PublicUserIdentity<T>;
@@ -37,10 +37,14 @@ interface AuthConfig<T extends UserIdentity> {
     };
     /** The fully-qualified base URL of your application (e.g., "https://yourapp.com"). */
     baseUrl: string;
-    /** Paths to redirect to for different authentication/authorization states. */
+    /** Paths to redirect to for different authorization states. */
     redirects: {
+        /** Path for users who are not logged in. */
         unauthenticated: string;
-        forbidden?: string;
+        /** Path for authenticated users who lack specific permissions for a resource. */
+        unauthorized: string;
+        /** Path for users whose accounts are globally forbidden or suspended. */
+        forbidden: string;
     };
     /** Optional settings for JWT claims. */
     jwt?: {
@@ -53,10 +57,12 @@ interface AuthConfig<T extends UserIdentity> {
 /**
  * Options for the `protectPage` and `protectApi` guards to control authorization and redirect behavior.
  */
-interface PageProtectionOptions<T extends UserIdentity, C = unknown> {
+interface ProtectionOptions<T extends UserIdentity, C = unknown> {
     /** Override the default redirect path for unauthenticated users. */
     unauthenticatedRedirect?: string;
     /** Override the default redirect path for unauthorized (forbidden) users. */
+    unauthorizedRedirect?: string;
+    /** Override the default redirect path for globally forbidden users. */
     forbiddenRedirect?: string;
     /** A key-value object to add as search parameters to the redirect URL on failure. */
     redirectParams?: Record<string, string>;
@@ -95,9 +101,9 @@ declare function createAuth<T extends UserIdentity>(config: AuthConfig<T>): {
     signIn: (signInIdentifier: string, secret: string) => Promise<PublicUserIdentity<T>>;
     signOut: () => Promise<void>;
     createAuthMiddleware: (matcher?: (req: NextRequest) => boolean) => (req: NextRequest) => Promise<NextResponse<unknown>>;
-    protectPage: <C>(options?: PageProtectionOptions<T, C>) => Promise<NonNullable<AuthSession<T>>>;
+    protectPage: <C>(options?: ProtectionOptions<T, C>) => Promise<NonNullable<AuthSession<T>>>;
     protectAction: <C>(options?: ActionProtectionOptions<T, C>) => Promise<NonNullable<AuthSession<T>>>;
-    protectApi: <C>(options?: PageProtectionOptions<T, C>) => Promise<{
+    protectApi: <C>(options?: ProtectionOptions<T, C>) => Promise<{
         session: NonNullable<AuthSession<T>>;
         response?: never;
     } | {
@@ -106,4 +112,4 @@ declare function createAuth<T extends UserIdentity>(config: AuthConfig<T>): {
     }>;
 };
 
-export { type ActionProtectionOptions, type AuthConfig, AuthSession, type PageProtectionOptions, PublicUserIdentity, UserIdentity, UserIdentityDAL, createAuth, verifyAccessToken };
+export { type ActionProtectionOptions, type AuthConfig, AuthSession, type ProtectionOptions, PublicUserIdentity, UserIdentity, UserIdentityDAL, createAuth, verifyAccessToken };

@@ -170,32 +170,69 @@ async function signOut(config) {
     config.secrets.refreshTokenSecret
   );
   if (!verified) return;
-  const { identifier } = verified.payload;
-  await config.dal.invalidateAllSessionsForIdentity(identifier);
+  await config.dal.invalidateAllSessionsForIdentity(
+    verified.payload.identifier
+  );
 }
 async function getAuthSession(config, req) {
   const cookieStore = req ? req.cookies : await cookies();
   const refreshTokenValue = cookieStore.get(config.cookies.refresh.name)?.value;
-  if (!refreshTokenValue) return { session: null };
+  if (!refreshTokenValue) {
+    return { session: null, failureReason: "NO_REFRESH_TOKEN" };
+  }
   const verifiedRefresh = await verifyRefreshToken(
     refreshTokenValue,
     config.secrets.refreshTokenSecret
   );
-  if (!verifiedRefresh) return { session: null, newTokens: null };
+  if (!verifiedRefresh) {
+    return {
+      session: null,
+      newTokens: null,
+      failureReason: "INVALID_REFRESH_TOKEN"
+    };
+  }
   const { identifier, version, jti, iat } = verifiedRefresh.payload;
-  if (!iat) return { session: null, newTokens: null };
+  if (!iat) {
+    return {
+      session: null,
+      newTokens: null,
+      failureReason: "INVALID_REFRESH_TOKEN"
+    };
+  }
   if (await config.dal.isTokenJtiUsed(jti)) {
     await config.dal.invalidateAllSessionsForIdentity(identifier);
     console.warn(
-      "SECURITY ALERT: Reused refresh token detected. All sessions invalidated."
+      "SECURITY ALERT: Reused refresh token detected. All sessions for this user have been invalidated."
     );
-    return { session: null, newTokens: null };
+    return {
+      session: null,
+      newTokens: null,
+      failureReason: "JTI_REUSE_DETECTED"
+    };
   }
   const reuseGracePeriod = config.cookies.refresh.maxAge + 60;
   await config.dal.markTokenJtiAsUsed(jti, reuseGracePeriod);
   const identity = await config.dal.fetchIdentityForSession(identifier);
-  if (!identity || identity.isForbidden || identity.version !== version) {
-    return { session: null, newTokens: null };
+  if (!identity) {
+    return {
+      session: null,
+      newTokens: null,
+      failureReason: "ACCOUNT_NOT_FOUND"
+    };
+  }
+  if (identity.isForbidden) {
+    return {
+      session: null,
+      newTokens: null,
+      failureReason: "ACCOUNT_FORBIDDEN"
+    };
+  }
+  if (identity.version !== version) {
+    return {
+      session: null,
+      newTokens: null,
+      failureReason: "VERSION_MISMATCH"
+    };
   }
   const tokenAge = Math.floor(Date.now() / 1e3) - iat;
   const rotationThreshold = config.cookies.access.maxAge;
@@ -207,17 +244,18 @@ async function getAuthSession(config, req) {
     config.jwt
   );
   let newRefreshToken;
-  if (shouldRotateRefresh)
+  if (shouldRotateRefresh) {
     newRefreshToken = await issueRefreshToken(
       identity,
       config.secrets.refreshTokenSecret,
       config.cookies.refresh.maxAge,
       config.jwt
     );
+  }
   const { version: _, isForbidden: __, ...publicIdentity } = identity;
   return {
     session: { identity: publicIdentity },
-    newTokens: shouldRotateRefresh ? { accessToken: newAccessToken, refreshToken: newRefreshToken } : { accessToken: newAccessToken }
+    newTokens: { accessToken: newAccessToken, refreshToken: newRefreshToken }
   };
 }
 
@@ -284,15 +322,20 @@ function createAuth(config) {
     throw new Error(
       "Auth configuration error: `redirects.unauthenticated` path is required."
     );
+  if (!config.redirects.unauthorized)
+    throw new Error(
+      "Auth configuration error: `redirects.unauthorized` path is required."
+    );
+  if (!config.redirects.forbidden)
+    throw new Error(
+      "Auth configuration error: `redirects.forbidden` path is required."
+    );
   const validatedBaseUrl = validateAndSanitizeBaseUrl(config.baseUrl);
   const effectiveConfig = {
     ...config,
     baseUrl: validatedBaseUrl,
     rotationStrategy: config.rotationStrategy ?? "always",
-    redirects: {
-      unauthenticated: config.redirects.unauthenticated,
-      forbidden: config.redirects.forbidden || config.redirects.unauthenticated
-    }
+    redirects: config.redirects
   };
   const getAuthSession2 = async () => {
     const { session, newTokens } = await getAuthSession(
@@ -383,7 +426,16 @@ function createAuth(config) {
     return `${url.pathname}${url.search}`;
   };
   const protectPage = async (options) => {
-    const { session } = await getAuthSession(effectiveConfig);
+    const { session, failureReason } = await getAuthSession(
+      effectiveConfig
+    );
+    if (failureReason === "ACCOUNT_FORBIDDEN") {
+      const redirectPath = await buildRedirectUrl(
+        options?.forbiddenRedirect || effectiveConfig.redirects.forbidden,
+        { ...options?.redirectParams, error: "account_suspended" }
+      );
+      redirect(redirectPath);
+    }
     if (!session) {
       const redirectPath = await buildRedirectUrl(
         options?.unauthenticatedRedirect || effectiveConfig.redirects.unauthenticated,
@@ -398,7 +450,7 @@ function createAuth(config) {
       );
       if (!isAuthorized) {
         const redirectPath = await buildRedirectUrl(
-          options?.forbiddenRedirect || effectiveConfig.redirects.forbidden,
+          options?.unauthorizedRedirect || effectiveConfig.redirects.unauthorized,
           options?.redirectParams
         );
         redirect(redirectPath);
@@ -407,7 +459,12 @@ function createAuth(config) {
     return session;
   };
   const protectAction = async (options) => {
-    const { session } = await getAuthSession(effectiveConfig);
+    const { session, failureReason } = await getAuthSession(
+      effectiveConfig
+    );
+    if (failureReason === "ACCOUNT_FORBIDDEN") {
+      throw new ForbiddenError("This account is suspended.");
+    }
     if (!session) {
       throw new NotAuthenticatedError();
     }
@@ -423,7 +480,17 @@ function createAuth(config) {
     return session;
   };
   const protectApi = async (options) => {
-    const { session } = await getAuthSession(effectiveConfig);
+    const { session, failureReason } = await getAuthSession(
+      effectiveConfig
+    );
+    if (failureReason === "ACCOUNT_FORBIDDEN") {
+      return {
+        response: NextResponse.json(
+          { error: "Account suspended" },
+          { status: 403 }
+        )
+      };
+    }
     if (!session) {
       return {
         response: NextResponse.json(

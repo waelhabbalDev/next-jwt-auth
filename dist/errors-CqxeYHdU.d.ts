@@ -43,6 +43,11 @@ interface UserIdentityDAL<T extends UserIdentity> {
 }
 
 /**
+ * @module @waelhabbaldev/next-jwt-auth/errors
+ * This module exports custom error classes used throughout the authentication package.
+ * Using these specific classes allows for granular error handling in Server Actions and other server-side logic.
+ */
+/**
  * Base error class for all authentication and authorization related errors
  * within the package. You can use `instanceof AuthError` to catch any
  * error originating from this library.
