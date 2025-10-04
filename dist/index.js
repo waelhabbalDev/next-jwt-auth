@@ -29,6 +29,52 @@ __export(src_exports, {
   verifyAccessToken: () => verifyAccessToken
 });
 module.exports = __toCommonJS(src_exports);
+
+// src/utils.ts
+function validateAndSanitizeBaseUrl(url) {
+  if (typeof url !== "string" || url.length === 0) {
+    throw new Error(
+      "Auth configuration error: `baseUrl` is required and must be a non-empty string."
+    );
+  }
+  try {
+    const urlObject = new URL(url);
+    if (urlObject.pathname !== "/" && urlObject.pathname !== "") {
+      throw new Error(
+        `Auth configuration error: \`baseUrl\` ("${url}") must not contain a path. Please provide the origin only (e.g., "https://example.com").`
+      );
+    }
+    if (urlObject.search !== "") {
+      throw new Error(
+        `Auth configuration error: \`baseUrl\` ("${url}") must not contain query parameters.`
+      );
+    }
+    if (urlObject.hash !== "") {
+      throw new Error(
+        `Auth configuration error: \`baseUrl\` ("${url}") must not contain a fragment hash.`
+      );
+    }
+    return urlObject.origin;
+  } catch (error) {
+    if (error instanceof TypeError) {
+      throw new Error(
+        `Auth configuration error: Invalid \`baseUrl\` provided ("${url}"). It must be an absolute URL (e.g., "https://example.com").`
+      );
+    }
+    throw error;
+  }
+}
+function sanitizeRedirectPath(pathname) {
+  if (!pathname || typeof pathname !== "string") {
+    return "/";
+  }
+  if (pathname.startsWith("/") && !pathname.startsWith("//") && !pathname.startsWith("/\\")) {
+    return pathname;
+  }
+  return "/";
+}
+
+// src/service.ts
 var import_server = require("next/server");
 var import_headers2 = require("next/headers");
 var import_navigation = require("next/navigation");
@@ -40,9 +86,16 @@ var import_headers = require("next/headers");
 var import_jose = require("jose");
 var import_uuid = require("uuid");
 var getSecretKey = (secret) => new TextEncoder().encode(secret);
+var getAlgorithm = (alg) => {
+  if (alg === "RS256") {
+    return "RS256";
+  }
+  return "HS256";
+};
 async function issueAccessToken(identity, secret, expiresIn, jwtOptions) {
   const { version, isForbidden, ...payload } = identity;
-  let jwt = new import_jose.SignJWT(payload).setProtectedHeader({ alg: "HS256" }).setIssuedAt().setSubject(identity.identifier).setExpirationTime(`${expiresIn}s`);
+  const algorithm = getAlgorithm(jwtOptions?.alg);
+  let jwt = new import_jose.SignJWT(payload).setProtectedHeader({ alg: algorithm }).setIssuedAt().setSubject(identity.identifier).setExpirationTime(`${expiresIn}s`);
   if (jwtOptions?.issuer) jwt = jwt.setIssuer(jwtOptions.issuer);
   if (jwtOptions?.audience) jwt = jwt.setAudience(jwtOptions.audience);
   return jwt.sign(getSecretKey(secret));
@@ -237,7 +290,7 @@ async function validateSessionFromCookies(config, req) {
     newTokens: { accessToken: newAccessToken, refreshToken: newRefreshToken }
   };
 }
-async function getAuthSession(config, req) {
+async function getSessionAndRefresh(config, req) {
   if (!req) {
     const headersList = await (0, import_headers.headers)();
     const identityHeader = headersList.get(AUTH_HEADER_KEY);
@@ -316,53 +369,210 @@ async function signOut(config) {
   );
 }
 
-// src/utils.ts
-function validateAndSanitizeBaseUrl(url) {
-  if (typeof url !== "string" || url.length === 0) {
-    throw new Error(
-      "Auth configuration error: `baseUrl` is required and must be a non-empty string."
+// src/service.ts
+var HEADER_PATHNAME_KEY = "x-auth-pathname";
+var AuthService = class {
+  constructor(config) {
+    this.config = {
+      ...config,
+      jwt: config.jwt ?? {}
+    };
+  }
+  // --- Core Public Methods ---
+  async getSession() {
+    const { session, newTokens } = await getSessionAndRefresh(this.config);
+    await this.handleTokenRefreshInResponse(newTokens);
+    return session;
+  }
+  signIn(signInIdentifier, secret) {
+    return signIn(signInIdentifier, secret, this.config);
+  }
+  signOut() {
+    return signOut(this.config);
+  }
+  createMiddleware(matcher = () => true) {
+    return async (req) => {
+      if (!matcher(req)) return import_server.NextResponse.next();
+      const requestHeaders = new Headers(req.headers);
+      requestHeaders.set(HEADER_PATHNAME_KEY, req.nextUrl.pathname);
+      const { session, newTokens } = await getSessionAndRefresh(
+        this.config,
+        req
+      );
+      if (session) {
+        requestHeaders.set(AUTH_HEADER_KEY, JSON.stringify(session.identity));
+      }
+      const response = import_server.NextResponse.next({
+        request: { headers: requestHeaders }
+      });
+      this.handleTokenRefreshInMiddleware(response, newTokens);
+      return response;
+    };
+  }
+  // --- Protection Guards ---
+  async protectPage(options) {
+    const { session, newTokens, failureReason } = await getSessionAndRefresh(
+      this.config
     );
-  }
-  try {
-    const urlObject = new URL(url);
-    if (urlObject.pathname !== "/" && urlObject.pathname !== "") {
-      throw new Error(
-        `Auth configuration error: \`baseUrl\` ("${url}") must not contain a path. Please provide the origin only (e.g., "https://example.com").`
+    await this.handleTokenRefreshInResponse(newTokens);
+    if (failureReason === "ACCOUNT_FORBIDDEN") {
+      const redirectPath = await this.buildRedirectUrl(
+        options?.forbiddenRedirect || this.config.redirects.forbidden,
+        { ...options?.redirectParams, error: "account_suspended" }
       );
+      (0, import_navigation.redirect)(redirectPath);
     }
-    if (urlObject.search !== "") {
-      throw new Error(
-        `Auth configuration error: \`baseUrl\` ("${url}") must not contain query parameters.`
+    if (!session) {
+      const redirectPath = await this.buildRedirectUrl(
+        options?.unauthenticatedRedirect || this.config.redirects.unauthenticated,
+        options?.redirectParams
       );
+      (0, import_navigation.redirect)(redirectPath);
     }
-    if (urlObject.hash !== "") {
-      throw new Error(
-        `Auth configuration error: \`baseUrl\` ("${url}") must not contain a fragment hash.`
+    if (options?.authorize) {
+      const isAuthorized = await options.authorize(
+        session.identity,
+        options.context
       );
+      if (!isAuthorized) {
+        const redirectPath = await this.buildRedirectUrl(
+          options?.unauthorizedRedirect || this.config.redirects.unauthorized,
+          options?.redirectParams
+        );
+        (0, import_navigation.redirect)(redirectPath);
+      }
     }
-    return urlObject.origin;
-  } catch (error) {
-    if (error instanceof TypeError) {
-      throw new Error(
-        `Auth configuration error: Invalid \`baseUrl\` provided ("${url}"). It must be an absolute URL (e.g., "https://example.com").`
+    return session;
+  }
+  async protectAction(options) {
+    const { session, newTokens, failureReason } = await getSessionAndRefresh(
+      this.config
+    );
+    await this.handleTokenRefreshInResponse(newTokens);
+    if (failureReason === "ACCOUNT_FORBIDDEN") {
+      throw new ForbiddenError("This account is suspended.");
+    }
+    if (!session) {
+      throw new NotAuthenticatedError();
+    }
+    if (options?.authorize) {
+      const isAuthorized = await options.authorize(
+        session.identity,
+        options.context
       );
+      if (!isAuthorized) {
+        throw new ForbiddenError();
+      }
     }
-    throw error;
+    return session;
   }
-}
-function sanitizeRedirectPath(pathname) {
-  if (!pathname || typeof pathname !== "string") {
-    return "/";
+  async protectApi(options) {
+    const { session, newTokens, failureReason } = await getSessionAndRefresh(
+      this.config
+    );
+    await this.handleTokenRefreshInResponse(newTokens);
+    if (failureReason === "ACCOUNT_FORBIDDEN") {
+      return {
+        session: null,
+        response: import_server.NextResponse.json(
+          { error: "Account suspended" },
+          { status: 403 }
+        )
+      };
+    }
+    if (!session) {
+      return {
+        session: null,
+        response: import_server.NextResponse.json(
+          { error: "Not authenticated" },
+          { status: 401 }
+        )
+      };
+    }
+    if (options?.authorize) {
+      const isAuthorized = await options.authorize(
+        session.identity,
+        options.context
+      );
+      if (!isAuthorized) {
+        return {
+          session: null,
+          response: import_server.NextResponse.json({ error: "Forbidden" }, { status: 403 })
+        };
+      }
+    }
+    return { session, response: null };
   }
-  if (pathname.startsWith("/") && !pathname.startsWith("//") && !pathname.startsWith("/\\")) {
-    return pathname;
+  async handleTokenRefreshInResponse(newTokens) {
+    if (!newTokens) return;
+    const cookieStore = await (0, import_headers2.cookies)();
+    if (!newTokens.accessToken) {
+      cookieStore.set(getClearAccessCookie(this.config.cookies.access.name));
+      cookieStore.set(getClearRefreshCookie(this.config.cookies.refresh.name));
+    } else {
+      cookieStore.set(
+        getAccessCookie(
+          newTokens.accessToken,
+          this.config.cookies.access.name,
+          this.config.cookies.access.maxAge
+        )
+      );
+      if (newTokens.refreshToken) {
+        cookieStore.set(
+          getRefreshCookie(
+            newTokens.refreshToken,
+            this.config.cookies.refresh.name,
+            this.config.cookies.refresh.maxAge
+          )
+        );
+      }
+    }
   }
-  return "/";
-}
+  handleTokenRefreshInMiddleware(response, newTokens) {
+    if (!newTokens) return;
+    if (!newTokens.accessToken) {
+      response.cookies.set(
+        getClearAccessCookie(this.config.cookies.access.name)
+      );
+      response.cookies.set(
+        getClearRefreshCookie(this.config.cookies.refresh.name)
+      );
+    } else {
+      response.cookies.set(
+        getAccessCookie(
+          newTokens.accessToken,
+          this.config.cookies.access.name,
+          this.config.cookies.access.maxAge
+        )
+      );
+      if (newTokens.refreshToken) {
+        response.cookies.set(
+          getRefreshCookie(
+            newTokens.refreshToken,
+            this.config.cookies.refresh.name,
+            this.config.cookies.refresh.maxAge
+          )
+        );
+      }
+    }
+  }
+  async buildRedirectUrl(targetPath, params = {}) {
+    const headersList = await (0, import_headers2.headers)();
+    const rawPathname = headersList.get(HEADER_PATHNAME_KEY);
+    const currentPath = sanitizeRedirectPath(rawPathname);
+    const url = new URL(targetPath, this.config.baseUrl);
+    if (targetPath === this.config.redirects.unauthenticated) {
+      url.searchParams.set("callbackUrl", currentPath);
+    }
+    for (const [key, value] of Object.entries(params)) {
+      url.searchParams.set(key, value);
+    }
+    return `${url.pathname}${url.search}`;
+  }
+};
 
 // src/index.ts
-var HEADER_PATHNAME_KEY = "x-auth-pathname";
-function createAuth(config) {
+function validateConfig(config) {
   if (!config.secrets.accessTokenSecret || config.secrets.accessTokenSecret.length < 32)
     throw new Error(
       "Auth configuration error: Access token secret must be at least 32 characters long."
@@ -387,199 +597,22 @@ function createAuth(config) {
     throw new Error(
       "Auth configuration error: `redirects.forbidden` path is required."
     );
-  const validatedBaseUrl = validateAndSanitizeBaseUrl(config.baseUrl);
-  const effectiveConfig = {
-    ...config,
-    baseUrl: validatedBaseUrl,
-    redirects: config.redirects
-  };
-  const getAuthSession2 = async () => {
-    const { session, newTokens } = await getAuthSession(effectiveConfig);
-    if (newTokens) {
-      const cookieStore = await (0, import_headers2.cookies)();
-      if (!newTokens.accessToken) {
-        cookieStore.set(
-          getClearAccessCookie(effectiveConfig.cookies.access.name)
-        );
-        cookieStore.set(
-          getClearRefreshCookie(effectiveConfig.cookies.refresh.name)
-        );
-      } else {
-        cookieStore.set(
-          getAccessCookie(
-            newTokens.accessToken,
-            effectiveConfig.cookies.access.name,
-            effectiveConfig.cookies.access.maxAge
-          )
-        );
-        if (newTokens.refreshToken) {
-          cookieStore.set(
-            getRefreshCookie(
-              newTokens.refreshToken,
-              effectiveConfig.cookies.refresh.name,
-              effectiveConfig.cookies.refresh.maxAge
-            )
-          );
-        }
-      }
-    }
-    return session;
-  };
-  const signIn2 = (signInIdentifier, secret) => signIn(signInIdentifier, secret, effectiveConfig);
-  const signOut2 = () => signOut(effectiveConfig);
-  const createAuthMiddleware = (matcher = () => true) => {
-    return async (req) => {
-      if (!matcher(req)) return import_server.NextResponse.next();
-      const requestHeaders = new Headers(req.headers);
-      requestHeaders.set(HEADER_PATHNAME_KEY, req.nextUrl.pathname);
-      const { session, newTokens } = await getAuthSession(
-        effectiveConfig,
-        req
-      );
-      if (session) {
-        requestHeaders.set(AUTH_HEADER_KEY, JSON.stringify(session.identity));
-      }
-      const response = import_server.NextResponse.next({
-        request: { headers: requestHeaders }
-      });
-      if (newTokens) {
-        if (!newTokens.accessToken) {
-          response.cookies.set(
-            getClearAccessCookie(effectiveConfig.cookies.access.name)
-          );
-          response.cookies.set(
-            getClearRefreshCookie(effectiveConfig.cookies.refresh.name)
-          );
-        } else {
-          response.cookies.set(
-            getAccessCookie(
-              newTokens.accessToken,
-              effectiveConfig.cookies.access.name,
-              effectiveConfig.cookies.access.maxAge
-            )
-          );
-          if (newTokens.refreshToken) {
-            response.cookies.set(
-              getRefreshCookie(
-                newTokens.refreshToken,
-                effectiveConfig.cookies.refresh.name,
-                effectiveConfig.cookies.refresh.maxAge
-              )
-            );
-          }
-        }
-      }
-      return response;
-    };
-  };
-  const buildRedirectUrl = async (targetPath, params = {}) => {
-    const headersList = await (0, import_headers2.headers)();
-    const rawPathname = headersList.get(HEADER_PATHNAME_KEY);
-    const currentPath = sanitizeRedirectPath(rawPathname);
-    const url = new URL(targetPath, effectiveConfig.baseUrl);
-    if (targetPath === effectiveConfig.redirects.unauthenticated) {
-      url.searchParams.set("callbackUrl", currentPath);
-    }
-    for (const [key, value] of Object.entries(params)) {
-      url.searchParams.set(key, value);
-    }
-    return `${url.pathname}${url.search}`;
-  };
-  const protectPage = async (options) => {
-    const { session, failureReason } = await getAuthSession(
-      effectiveConfig
-    );
-    if (failureReason === "ACCOUNT_FORBIDDEN") {
-      const redirectPath = await buildRedirectUrl(
-        options?.forbiddenRedirect || effectiveConfig.redirects.forbidden,
-        { ...options?.redirectParams, error: "account_suspended" }
-      );
-      (0, import_navigation.redirect)(redirectPath);
-    }
-    if (!session) {
-      const redirectPath = await buildRedirectUrl(
-        options?.unauthenticatedRedirect || effectiveConfig.redirects.unauthenticated,
-        options?.redirectParams
-      );
-      (0, import_navigation.redirect)(redirectPath);
-    }
-    if (options?.authorize) {
-      const isAuthorized = await options.authorize(
-        session.identity,
-        options.context
-      );
-      if (!isAuthorized) {
-        const redirectPath = await buildRedirectUrl(
-          options?.unauthorizedRedirect || effectiveConfig.redirects.unauthorized,
-          options?.redirectParams
-        );
-        (0, import_navigation.redirect)(redirectPath);
-      }
-    }
-    return session;
-  };
-  const protectAction = async (options) => {
-    const { session, failureReason } = await getAuthSession(
-      effectiveConfig
-    );
-    if (failureReason === "ACCOUNT_FORBIDDEN") {
-      throw new ForbiddenError("This account is suspended.");
-    }
-    if (!session) {
-      throw new NotAuthenticatedError();
-    }
-    if (options?.authorize) {
-      const isAuthorized = await options.authorize(
-        session.identity,
-        options.context
-      );
-      if (!isAuthorized) {
-        throw new ForbiddenError();
-      }
-    }
-    return session;
-  };
-  const protectApi = async (options) => {
-    const { session, failureReason } = await getAuthSession(
-      effectiveConfig
-    );
-    if (failureReason === "ACCOUNT_FORBIDDEN") {
-      return {
-        response: import_server.NextResponse.json(
-          { error: "Account suspended" },
-          { status: 403 }
-        )
-      };
-    }
-    if (!session) {
-      return {
-        response: import_server.NextResponse.json(
-          { error: "Not authenticated" },
-          { status: 401 }
-        )
-      };
-    }
-    if (options?.authorize) {
-      const isAuthorized = await options.authorize(
-        session.identity,
-        options.context
-      );
-      if (!isAuthorized) {
-        return {
-          response: import_server.NextResponse.json({ error: "Forbidden" }, { status: 403 })
-        };
-      }
-    }
-    return { session };
-  };
   return {
-    getAuthSession: getAuthSession2,
-    signIn: signIn2,
-    signOut: signOut2,
-    createAuthMiddleware,
-    protectPage,
-    protectAction,
-    protectApi
+    ...config,
+    baseUrl: validateAndSanitizeBaseUrl(config.baseUrl)
+  };
+}
+function createAuth(config) {
+  const validatedConfig = validateConfig(config);
+  const service = new AuthService(validatedConfig);
+  return {
+    getSession: service.getSession.bind(service),
+    signIn: service.signIn.bind(service),
+    signOut: service.signOut.bind(service),
+    createMiddleware: service.createMiddleware.bind(service),
+    protectPage: service.protectPage.bind(service),
+    protectAction: service.protectAction.bind(service),
+    protectApi: service.protectApi.bind(service)
   };
 }
 // Annotate the CommonJS export names for ESM import in node:
