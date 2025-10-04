@@ -15,11 +15,11 @@ A lightweight, secure, and performance-optimized authentication library for the 
 
 ## Features
 
-*   **State-of-the-Art Security:** Automatic Refresh Token Rotation and Reuse Detection to protect against token theft.
-*   **Declarative Protection Guards:** Secure your application with a single line of code. Use `auth.protectPage()`, `auth.protectAction()`, and `auth.protectApi()` to enforce authentication and authorization rules effortlessly.
-*   **Optimized Performance:** Built-in request-level caching automatically prevents redundant authentication checks, eliminating race conditions between Middleware and Server Components and ensuring optimal performance.
+*   **State-of-the-Art Security:** Automatic Refresh Token Rotation and Reuse Detection to protect against token theft and session hijacking.
+*   **Declarative Protection Guards:** Secure your application with a single line of code. Use `protectPage()`, `protectAction()`, and `protectApi()` to enforce authentication and authorization rules effortlessly.
+*   **Optimized Performance:** The auth middleware provides built-in request-level caching, automatically preventing redundant database checks between Middleware and Server Components, which eliminates race conditions and ensures optimal performance.
 *   **Flexible Authorization:** Implement role-based (RBAC) or ownership-based (ABAC) access control with a simple `authorize` callback in the protection guards.
-*   **Granular Failure States:** Correctly distinguish between **Unauthenticated** (not logged in), **Forbidden** (account banned), and **Unauthorized** (lacks permissions) states, redirecting users to the appropriate page for each case.
+*   **Granular Failure States:** Correctly distinguish between **Unauthenticated** (not logged in), **Forbidden** (account banned), and **Unauthorized** (lacks permissions), redirecting users or returning appropriate errors for each case.
 *   **Secure Cookie Storage:** Tokens are stored in `HttpOnly`, `Secure`, and `SameSite=Strict` cookies to protect against XSS and CSRF.
 *   **Next.js 14+ Ready:** Built for the App Router. Works seamlessly with Server Components, Server Actions, API Route Handlers, and Middleware.
 *   **DAL Agnostic:** Plug in your own database logic (Prisma, Drizzle, etc.) via a simple `UserIdentityDAL` interface.
@@ -30,11 +30,11 @@ A lightweight, secure, and performance-optimized authentication library for the 
 ## Installation
 
 ```bash
-bun add @waelhabbalDev/next-jwt-auth
+bun add @waelhabbaldev/next-jwt-auth
 # or
-npm install @waelhabbalDev/next-jwt-auth
+npm install @waelhabbaldev/next-jwt-auth
 # or
-yarn add @waelhabbalDev/next-jwt-auth
+yarn add @waelhabbaldev/next-jwt-auth
 ```
 
 ---
@@ -53,21 +53,19 @@ CREATE TABLE `users` (
   `isForbidden` BOOLEAN NOT NULL DEFAULT FALSE
 );
 ```
-<!-- START MODIFICATION -->
-_**Note:** The column name `tokenVersion` has been updated to `version` in the latest examples for brevity._
-<!-- END MODIFICATION -->
 
 #### 2. `revokedTokens` Table
 Required for refresh token reuse detection.
 
 ```sql
 CREATE TABLE `revokedTokens` (
-    `jti` VARCHAR(36) NOT NULL,
-    `expiresAt` TIMESTAMP NOT NULL,
-    PRIMARY KEY (`jti`)
+    `jti` VARCHAR(36) NOT NULL COMMENT 'The JWT ID, typically a UUID.',
+    `expiresAt` TIMESTAMP NOT NULL COMMENT 'When the token can be safely deleted.',
+    PRIMARY KEY (`jti`),
+    INDEX `IX_revokedTokens_expiresAt` (`expiresAt`)
 );
 ```
-**Note:** You should run a scheduled job (e.g., a cron job) to periodically delete expired JTIs from this table to keep it clean.
+**Note:** You should run a scheduled job (e.g., a cron job) to periodically delete expired JTIs from this table to keep it clean: `DELETE FROM revokedTokens WHERE expiresAt < NOW();`.
 
 ---
 
@@ -79,9 +77,10 @@ Define a type for your user's identity and implement the `UserIdentityDAL` inter
 
 ```ts
 // src/lib/auth-dal.ts
-import type { UserIdentity, UserIdentityDAL } from "@waelhabbalDev/next-jwt-auth";
-import db from "./db"; // Your database client (e.g., Prisma)
+import type { UserIdentity, UserIdentityDAL } from "@waelhabbaldev/next-jwt-auth";
+import db from "./db"; // Your database client (e.g., Prisma, Drizzle)
 
+// Extend the base UserIdentity with your application's specific fields
 export interface AppUserIdentity extends UserIdentity {
   userId: number;
   username: string;
@@ -89,8 +88,20 @@ export interface AppUserIdentity extends UserIdentity {
 }
 
 export const authDal: UserIdentityDAL<AppUserIdentity> = {
-  // Implement all 5 DAL methods here...
-  // fetchIdentityByCredentials, fetchIdentityForSession, etc.
+  // Verifies credentials and returns the full user identity on success.
+  async fetchIdentityByCredentials(username, password) { /* ... */ },
+
+  // Fetches the latest user identity during session refresh.
+  async fetchIdentityForSession(identifier) { /* ... */ },
+
+  // Bumps the user's `version`, invalidating all their sessions.
+  async invalidateAllSessionsForIdentity(identifier) { /* ... */ },
+
+  // Checks if a refresh token's JTI has been used.
+  async isTokenJtiUsed(jti) { /* ... */ },
+
+  // Stores a used JTI until its natural expiry to detect reuse.
+  async markTokenJtiAsUsed(jti, expirationInSeconds) { /* ... */ },
 };
 ```
 
@@ -100,12 +111,12 @@ Create a central file (`src/lib/auth.ts`) to configure and export your `auth` ob
 
 ```ts
 // src/lib/auth.ts
-import { createAuth } from "@waelhabbalDev/next-jwt-auth";
-import { authDal } from "./auth-dal";
-import { AppUserIdentity } from "./auth-dal";
+import { createAuth } from "@waelhabbaldev/next-jwt-auth";
+import { authDal, AppUserIdentity } from "./auth-dal";
 
 export const auth = createAuth<AppUserIdentity>({
   dal: authDal,
+  
   // Your application's fully-qualified base URL
   baseUrl: process.env.BASE_URL!, 
   
@@ -115,52 +126,40 @@ export const auth = createAuth<AppUserIdentity>({
   },
   
   cookies: {
-    access: { name: "____at", maxAge: 15 * 60 },       // 15 minutes
-    refresh: { name: "____rt", maxAge: 7 * 24 * 60 * 60 }, // 7 days
+    access: { name: "__at", maxAge: 15 * 60 },        // 15 minutes
+    refresh: { name: "__rt", maxAge: 30 * 24 * 60 * 60 }, // 30 days
   },
 
   // Paths to redirect users to on authentication/authorization failure
   redirects: {
     unauthenticated: "/signin",
-    unauthorized: "/unauthorized", // User is logged in but lacks permissions
-    forbidden: "/forbidden",       // User's account is suspended/banned
+    unauthorized: "/dashboard?error=unauthorized", // User is logged in but lacks permissions
+    forbidden: "/signin?error=forbidden",         // User's account is suspended/banned
   },
 });
 ```
 
-<!-- START MODIFICATION -->
 ### 3. Set Up Middleware for Session Management
 
-The middleware is the most important part of the setup. It handles automatic session refreshing and is the key to the library's performance and stability.
+The middleware is the **most important part** of the setup. It handles automatic session refreshing and is the key to the library's performance and stability.
 
 Create a `middleware.ts` file in the root of your project (or in `src/`).
 
 ```ts
 // middleware.ts
-import { NextRequest } from "next/server";
 import { auth } from "./lib/auth";
 
-// The `createAuthMiddleware` function from your auth instance will handle
-// all session validation, token refreshing, and redirects for unauthenticated
-// users on the routes you specify.
-const authMiddleware = auth.createAuthMiddleware(
-  // This matcher function determines which routes are protected.
-  (req: NextRequest) => {
-    const { pathname } = req.nextUrl;
-    // Return `true` for any path that requires authentication.
-    return pathname.startsWith("/dashboard");
-  }
-);
-
-export default authMiddleware;
+// The `createMiddleware` function from your auth instance will handle
+// all session validation and token refreshing automatically.
+export default auth.createMiddleware();
 
 export const config = {
-  // Match all paths except for static assets and API routes.
+  // The middleware will run on all paths except for the ones specified here.
+  // This is the recommended approach to ensure your session is always fresh.
   matcher: ["/((?!api|_next/static|_next/image|favicon.ico).*)"],
 };
 ```
-> **How it works:** This middleware runs the full authentication check. If the session is valid, it attaches the user's identity to a request header. This allows subsequent calls to `auth.getAuthSession()` or `auth.protectPage()` within the same request to be near-instantaneous, preventing database waterfalls and race conditions.
-<!-- END MODIFICATION -->
+> **How it works:** This middleware runs the full authentication check on every request. If the session is valid, it attaches the user's identity to a request header. This allows subsequent calls to `getSession()` or `protectPage()` within the same request to be **near-instantaneous, cached reads**, preventing database waterfalls and race conditions.
 
 ---
 
@@ -168,49 +167,52 @@ export const config = {
 
 This library provides declarative guards to easily protect your application at every level.
 
-<!-- START MODIFICATION -->
 ### Protecting Pages and Layouts (Server Components)
 
-For protected areas of your app (like a dashboard), it's best practice to protect the root layout. Use `auth.getAuthSession()` to read the session that was already validated by the middleware.
+Use `auth.protectPage()` to secure any Server Component. It will automatically redirect unauthenticated users.
 
 ```tsx
 // app/dashboard/layout.tsx
 import { auth } from "@/lib/auth";
-import { redirect } from "next/navigation";
+import { AppUserIdentity } from "@/lib/auth-dal";
+import { Sidebar } from "./_components/sidebar";
 
 export default async function DashboardLayout({ children }) {
-  // The middleware has already validated the session and refreshed tokens if needed.
-  // This call is a fast, cached read that doesn't re-validate with the database.
-  const session = await auth.getAuthSession();
+  // This call validates the session. Because of the middleware cache,
+  // this is a fast, in-memory check if the user is already navigating the site.
+  // It only hits the database on the first load or after the access token expires.
+  const session = await auth.protectPage();
+  const identity = session.identity as AppUserIdentity;
 
-  // This check acts as a server-side safety net.
-  if (!session) {
-    redirect("/signin");
-  }
-
-  return <div>Welcome, {session.identity.username}</div>;
+  return (
+    <div className="flex">
+      <Sidebar user={identity} />
+      <main>{children}</main>
+    </div>
+  );
 }
 ```
 
-For pages requiring specific permissions (e.g., role-based access), use `auth.protectPage()`.
-
 #### Role-Based Authorization (RBAC)
+For pages requiring specific permissions, use the `authorize` option.
+
 ```tsx
 // app/admin/page.tsx
 import { auth } from "@/lib/auth";
 
 export default async function AdminPage() {
+  // If the logged-in user is not an admin, they will be redirected
+  // to the `unauthorized` path defined in your config.
   const session = await auth.protectPage({
-    // If the logged-in user is not an admin, they will be redirected to "/unauthorized".
     authorize: (identity) => identity.roles.includes("admin"),
   });
 
   return <h2>Admin Panel</h2>;
 }
 ```
-<!-- END MODIFICATION -->
 
 #### Ownership-Based Authorization (ABAC)
+Pass a `context` object to the guard for complex authorization checks.
 ```tsx
 // app/posts/[id]/edit/page.tsx
 import { auth } from "@/lib/auth";
@@ -246,7 +248,7 @@ export async function createPostAction(formData: FormData) {
         authorize: (identity) => identity.roles.includes('editor')
     });
     
-    // ... logic for creating a post ...
+    // ... logic for creating a post using session.identity ...
     return { success: true };
   } catch (error) {
     if (error instanceof NotAuthenticatedError) {
@@ -262,7 +264,7 @@ export async function createPostAction(formData: FormData) {
 
 ### Protecting API Routes
 
-Use `auth.protectApi()` to secure your Route Handlers. It returns a `NextResponse` on failure.
+Use `auth.protectApi()` to secure your Route Handlers. On failure, it returns a `response` object that you must return.
 
 ```ts
 // app/api/projects/[id]/route.ts
@@ -278,6 +280,7 @@ export async function GET(req, { params }) {
   }
 
   // If we reach here, the user is authenticated.
+  // TypeScript knows `session` is not null here.
   const project = await db.projects.findById(params.id, session.identity.identifier);
   return NextResponse.json(project);
 }
@@ -289,15 +292,15 @@ export async function GET(req, { params }) {
 
 The `createAuth` function returns an object with the following methods:
 
-| Method                 | Description                                                                                             | Failure Behavior |
-| ---------------------- | ------------------------------------------------------------------------------------------------------- | ---------------- |
-| `protectPage()`        | Secures Pages/Layouts with fine-grained authorization rules.                                            | Redirects        |
-| `protectAction()`      | Secures Server Actions.                                                                                 | Throws Error     |
-| `protectApi()`         | Secures API Routes.                                                                                     | Returns Response |
-| `getAuthSession()`     | **(Fast)** Fetches the session without protection. Reads from a request-level cache.                      | Returns `null`   |
-| `signIn()`             | Signs in a user and sets cookies.                                                                       | Throws Error     |
-| `signOut()`            | Signs out a user and invalidates the token family.                                                      | (N/A)            |
-| `createAuthMiddleware()` | **(Essential)** Creates middleware for automatic token refreshing and request caching.                   | Redirects        |
+| Method             | Description                                                                                             | Failure Behavior |
+| ------------------ | ------------------------------------------------------------------------------------------------------- | ---------------- |
+| `protectPage()`    | Secures Pages/Layouts with optional authorization rules.                                                | Redirects        |
+| `protectAction()`  | Secures Server Actions.                                                                                 | Throws Error     |
+| `protectApi()`     | Secures API Routes.                                                                                     | Returns Response |
+| `getSession()`     | **(Fast)** Fetches the session without protection. Reads from the middleware cache if available.          | Returns `null`   |
+| `signIn()`         | Signs in a user and sets session cookies.                                                               | Throws Error     |
+| `signOut()`        | Signs out a user and invalidates their session family.                                                  | (N/A)            |
+| `createMiddleware()`| **(Essential)** Creates middleware for automatic token refreshing and request caching.                   | Redirects        |
 
 ---
 
