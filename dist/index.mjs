@@ -241,7 +241,7 @@ function log(config, level, message, ...args) {
 }
 async function validateSessionFromCookies(config, req) {
   log(config, "info", "Performing full auth check from cookies.");
-  const cookieStore = req ? req.cookies : cookies();
+  const cookieStore = req ? req.cookies : await cookies();
   const refreshTokenValue = cookieStore.get(config.cookies.refresh.name)?.value;
   if (!refreshTokenValue) {
     return { session: null, failureReason: "NO_REFRESH_TOKEN" };
