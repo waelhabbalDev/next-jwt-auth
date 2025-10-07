@@ -221,19 +221,34 @@ export default async function SignInPage() {
 
 **2. Use the `CsrfInput` in your Client Component form:**
 
-```tsx
-// app/signin/your-client-form.tsx (Client Component)
-'use client';
-import { CsrfInput } from '@waelhabbaldev/next-jwt-auth/client';
-import { yourServerAction } from '@/app/actions';
+The `<CsrfInput /` component is designed for maximum ease of use. Simply place it in your form. It will automatically fetch the required token.
 
-export function YourClientFormComponent() {
+**1. Define a Server Action to get the token:**
+
+```ts
+// app/auth/actions.ts
+"use server";
+import { auth } from "@/lib/auth";
+
+export async function getCsrfTokenAction() {
+  return auth.getCsrfToken();
+}
+```
+
+**2. Use `CsrfInput` in your form:**
+
+```tsx
+// your-form-component.tsx
+"use client";
+import { CsrfInput } from "@waelhabbaldev/next-jwt-auth/client";
+import { getCsrfTokenAction } from "@/app/auth/actions";
+
+export function MyForm() {
   return (
-    <form action={yourServerAction}>
-      <CsrfInput />
-      {/* ... other form fields (username, password, etc.) */}
-      <button type="submit">Sign In</button>
-    </form>
+    <form action={...}
+      <CsrfInput getTokenAction={getCsrfTokenAction} /
+      {/* ... rest of your form */}
+    </form
   );
 }
 ```
