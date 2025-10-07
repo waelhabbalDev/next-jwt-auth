@@ -19,7 +19,7 @@ A lightweight, secure, and performance-optimized authentication library for the 
 *   **Flexible JWT Algorithms:** Supports both symmetric (`HS256`) and asymmetric (`RS256`) algorithms out of the box.
 *   **Zero-Downtime Key Rotation:** Built-in support for JWT Key Rotation (`kid`) to allow for seamless, zero-downtime secret updates.
 *   **Multi-Factor Authentication (MFA):** Easily add a second factor of authentication to your sign-in flow.
-*   **CSRF Protection:** Optional Double Submit Cookie pattern to protect your Server Actions from Cross-Site Request Forgery.
+*   **Built-in CSRF Protection:** Double Submit Cookie pattern to protect your Server Actions from Cross-Site Request Forgery, enabled by default.
 *   **Rate Limiting:** Pluggable rate-limiting support to protect against brute-force attacks on sign-in.
 *   **Declarative Protection Guards:** Secure your application with a single line of code using `protectPage()`, `protectAction()`, and `protectApi()`.
 *   **Optimized Performance:** Middleware-based request-level caching automatically prevents redundant database checks.
@@ -112,15 +112,31 @@ import { checkRateLimit } from "./rate-limiter"; // Your rate limit logic
 export const auth = createAuth<AppUserIdentity>({
   // Required
   dal: authDal,
-  baseUrl: process.env.BASE_URL!, 
+  baseUrl: process.env.BASE_URL!, // Used for creating absolute redirect URLs
   secrets: {
     accessTokenSecret: process.env.ACCESS_TOKEN_SECRET!,
     refreshTokenSecret: process.env.REFRESH_TOKEN_SECRET!,
   },
+  
+  // Secure defaults for cookies are automatically set.
+  // You can override them if needed.
   cookies: {
-    access: { name: "__at", maxAge: 15 * 60 },
-    refresh: { name: "__rt", maxAge: 30 * 24 * 60 * 60 },
+    access: { 
+      name: "__at", 
+      maxAge: 15 * 60, // 15 minutes
+    },
+    refresh: { 
+      name: "__rt", 
+      maxAge: 30 * 24 * 60 * 60, // 30 days
+      httpOnly: true, // Prevents client-side JS access
+      secure: process.env.NODE_ENV === 'production', // Only send over HTTPS
+      sameSite: 'lax', // CSRF protection
+    },
+    csrf: {
+      name: "csrf_token", // Default name for the CSRF token cookie
+    }
   },
+
   redirects: {
     unauthenticated: "/signin",
     unauthorized: "/dashboard?error=unauthorized",
@@ -129,7 +145,7 @@ export const auth = createAuth<AppUserIdentity>({
   
   // Recommended Security Features
   refreshTokenRotationIntervalSeconds: 7 * 24 * 60 * 60, // 7 days
-  csrfEnabled: true,
+  csrfEnabled: true, // Recommended: true for Server Action protection
   
   // Optional Features
   rateLimit: checkRateLimit,
@@ -149,13 +165,12 @@ import { auth } from "./lib/auth";
 export default auth.createMiddleware();
 
 export const config = {
-  // IMPORTANT: If your UserIdentityDAL performs database queries (which it almost
-  // always will), you MUST export this line to force the middleware to use the
-  // Node.js runtime. The Edge runtime does not support most database drivers.
-  
-  // 📢 📢 this will need the most recent nextjs, I tested it on version 15.6.0-canary 
-  runtime = 'nodejs',
-  // Match all paths except for static assets.
+  // IMPORTANT: This library requires the Node.js runtime for the middleware due
+  // to its reliance on database drivers, which are not supported in the Edge runtime.
+  // Please ensure your middleware.ts is configured accordingly.
+  runtime: 'nodejs',
+
+  // Match all paths except for static assets and API routes handled elsewhere.
   matcher: ["/((?!api|_next/static|_next/image|favicon.ico).*)"],
 };
 ```
@@ -173,7 +188,7 @@ Use `auth.protectPage()` to secure any Server Component. It will automatically r
 import { auth } from "@/lib/auth";
 
 export default async function DashboardLayout({ children }) {
-  // This validates the session and redirects if invalid.
+  // Validates the session and redirects if invalid.
   // Thanks to the middleware, this is a fast, in-memory check.
   const session = await auth.protectPage();
   
@@ -194,7 +209,7 @@ import { NotAuthenticatedError, CsrfError } from "@waelhabbaldev/next-jwt-auth";
 export async function sensitiveAction(formData: FormData) {
   try {
     const session = await auth.protectAction();
-    // ... logic ...
+    // ... logic for the action ...
   } catch (error) {
     if (error instanceof CsrfError) { /* handle CSRF error */ }
     if (error instanceof NotAuthenticatedError) { /* handle auth error */ }
@@ -202,7 +217,38 @@ export async function sensitiveAction(formData: FormData) {
   }
 }
 ```
-On the client, you must read the `csrf_token` cookie and send it in the `x-csrf-token` header with your request.
+
+#### Client-Side CSRF Implementation
+When CSRF protection is enabled, your client-side code must read the `csrf_token` cookie and include its value in the `x-csrf-token` header for every state-changing request (e.g., POST, PUT, DELETE).
+
+Here is a helper function to read the cookie and an example `fetch` call:
+
+```javascript
+// A simple helper to get a cookie value by name
+function getCookie(name) {
+  const value = `; ${document.cookie}`;
+  const parts = value.split(`; ${name}=`);
+  if (parts.length === 2) return parts.pop().split(';').shift();
+}
+
+async function callSensitiveAction() {
+  // Read the token from the cookie (ensure 'csrf_token' matches your config)
+  const csrfToken = getCookie('csrf_token');
+
+  const response = await fetch('/your/api/endpoint', { // or Server Action endpoint
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      'x-csrf-token': csrfToken,
+    },
+    body: JSON.stringify({ message: "Hello World" }),
+  });
+
+  if (!response.ok) {
+    // Handle error
+  }
+}
+```
 
 ### Protecting API Routes
 Use `auth.protectApi()`. On failure, it returns a `response` object that you must return.
@@ -223,8 +269,9 @@ export async function GET(req, { params }) {
 
 ---
 
-## Advanced Usage: Asymmetric Keys (RS256)
+## Advanced Usage
 
+### Asymmetric Keys (RS256)
 For advanced architectures, you can use `RS256` with public/private key pairs.
 
 ```ts
@@ -244,7 +291,23 @@ export const auth = createAuth({
   },
 });
 ```
-> **Verification in other services:** To verify a token in a different microservice, you would use the corresponding **public key** as the secret in that service's `verifyAccessToken` call.
+> **Verification in other services:** To verify a token in a different microservice, you would use the corresponding **public key** as the secret in that service's verification logic.
+
+### Zero-Downtime Key Rotation
+To rotate secrets without invalidating active user sessions, your configuration should support providing multiple valid keys—the new key for signing and the old keys for verification.
+
+While the primary configuration expects a single secret, the underlying `jose` library can be configured to verify against a set of keys. A future version of this library may expose a simpler API for this, such as:
+
+```ts
+// Example of a potential future API for seamless rotation:
+secrets: {
+  accessTokenSecrets: [
+    { kid: 'v2', secret: process.env.NEW_SECRET! }, // Used for signing new tokens
+    { kid: 'v1', secret: process.env.OLD_SECRET! }, // Used for verifying old tokens
+  ],
+  // ... similarly for refresh tokens
+}
+```
 
 ---
 

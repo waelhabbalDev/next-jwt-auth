@@ -1,3 +1,8 @@
+import {
+  CsrfInput,
+  CsrfProvider
+} from "./chunk-2OP7KWVV.mjs";
+
 // src/utils.ts
 function validateAndSanitizeBaseUrl(url) {
   if (typeof url !== "string" || url.length === 0) {
@@ -466,6 +471,18 @@ var AuthService = class {
       providers: config.providers ?? {},
       csrfEnabled: config.csrfEnabled ?? false
     };
+    this.CsrfProvider = CsrfProvider;
+    this.CsrfInput = CsrfInput;
+  }
+  async getCsrfToken() {
+    const cookieStore = await cookies2();
+    let token = cookieStore.get("csrf_token")?.value;
+    if (!token) {
+      const csrfCookie = getCsrfCookie(this.config.cookies.access.maxAge);
+      token = csrfCookie.value;
+      cookieStore.set(csrfCookie);
+    }
+    return token;
   }
   async getSession() {
     const { session, newTokens } = await getSessionAndRefresh(this.config);
@@ -542,36 +559,46 @@ var AuthService = class {
     }
     return session;
   }
-  async protectAction(options) {
+  createProtectedAction(action, options) {
+    return async (formData) => {
+      await this.protectAction(options, formData);
+      return action(formData);
+    };
+  }
+  async protectAction(options, formData) {
     const { session, newTokens, failureReason } = await getSessionAndRefresh(
       this.config
     );
     await this.handleTokenRefreshInResponse(newTokens);
     if (this.config.csrfEnabled) {
-      const headersList = await headers2();
       const cookieStore = await cookies2();
-      const csrfToken = headersList.get("x-csrf-token");
       const cookieCsrf = cookieStore.get("csrf_token")?.value;
-      if (!csrfToken || !cookieCsrf || csrfToken !== cookieCsrf) {
-        throw new CsrfError(this.config.errorMessages.CsrfError);
+      const formCsrf = formData?.get("csrf_token")?.toString();
+      if (formData) {
+        if (!formCsrf || !cookieCsrf || formCsrf !== cookieCsrf) {
+          throw new CsrfError(this.config.errorMessages.CsrfError);
+        }
+      } else {
+        const headersList = await headers2();
+        const headerCsrf = headersList.get("x-csrf-token");
+        if (!headerCsrf || !cookieCsrf || headerCsrf !== cookieCsrf) {
+          throw new CsrfError(this.config.errorMessages.CsrfError);
+        }
       }
     }
-    if (failureReason === "ACCOUNT_FORBIDDEN") {
+    if (failureReason === "ACCOUNT_FORBIDDEN")
       throw new ForbiddenError("This account is suspended.");
-    }
-    if (!session) {
+    if (!session)
       throw new NotAuthenticatedError(
         this.config.errorMessages.NotAuthenticatedError
       );
-    }
     if (options?.authorize) {
       const isAuthorized = await options.authorize(
         session.identity,
         options.context
       );
-      if (!isAuthorized) {
+      if (!isAuthorized)
         throw new ForbiddenError(this.config.errorMessages.ForbiddenError);
-      }
     }
     return session;
   }
@@ -739,14 +766,20 @@ function createAuth(config) {
   const validatedConfig = validateConfig(config);
   const service = new AuthService(validatedConfig);
   return {
+    getCsrfToken: service.getCsrfToken.bind(service),
+    CsrfProvider: service.CsrfProvider,
+    CsrfInput: service.CsrfInput,
     getSession: service.getSession.bind(service),
     refreshSession: service.refreshSession.bind(service),
     signIn: service.signIn.bind(service),
     signOut: service.signOut.bind(service),
     createMiddleware: service.createMiddleware.bind(service),
+    // Protection methods
     protectPage: service.protectPage.bind(service),
     protectAction: service.protectAction.bind(service),
-    protectApi: service.protectApi.bind(service)
+    // The manual method
+    protectApi: service.protectApi.bind(service),
+    createProtectedAction: service.createProtectedAction.bind(service)
   };
 }
 export {

@@ -33,12 +33,30 @@ var index_client_exports = {};
 __export(index_client_exports, {
   AuthContext: () => AuthContext,
   AuthProvider: () => AuthProvider,
+  CsrfInput: () => CsrfInput,
+  CsrfProvider: () => CsrfProvider,
   useAuth: () => useAuth
 });
 module.exports = __toCommonJS(index_client_exports);
 var import_react = require("react");
 var import_swr = __toESM(require("swr"));
 var import_jsx_runtime = require("react/jsx-runtime");
+var CsrfContext = (0, import_react.createContext)(null);
+function CsrfProvider({
+  token,
+  children
+}) {
+  return /* @__PURE__ */ (0, import_jsx_runtime.jsx)(CsrfContext.Provider, { value: token, children });
+}
+function CsrfInput() {
+  const token = (0, import_react.useContext)(CsrfContext);
+  if (token === null) {
+    console.warn(
+      "[next-jwt-auth] CsrfInput component was rendered without a CsrfProvider parent. The CSRF token will not be included in form submissions."
+    );
+  }
+  return /* @__PURE__ */ (0, import_jsx_runtime.jsx)("input", { type: "hidden", name: "csrf_token", value: token || "" });
+}
 var AuthContext = (0, import_react.createContext)(null);
 function AuthProvider({
   children,
@@ -136,5 +154,7 @@ function useAuth() {
 0 && (module.exports = {
   AuthContext,
   AuthProvider,
+  CsrfInput,
+  CsrfProvider,
   useAuth
 });

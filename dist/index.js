@@ -1,7 +1,9 @@
 "use strict";
+var __create = Object.create;
 var __defProp = Object.defineProperty;
 var __getOwnPropDesc = Object.getOwnPropertyDescriptor;
 var __getOwnPropNames = Object.getOwnPropertyNames;
+var __getProtoOf = Object.getPrototypeOf;
 var __hasOwnProp = Object.prototype.hasOwnProperty;
 var __export = (target, all) => {
   for (var name in all)
@@ -15,6 +17,14 @@ var __copyProps = (to, from, except, desc) => {
   }
   return to;
 };
+var __toESM = (mod, isNodeMode, target) => (target = mod != null ? __create(__getProtoOf(mod)) : {}, __copyProps(
+  // If the importer is in node compatibility mode or this is not an ESM
+  // file that has been converted to a CommonJS file using a Babel-
+  // compatible transform (i.e. "__esModule" has not been set), then set
+  // "default" to the CommonJS "module.exports" for node compatibility.
+  isNodeMode || !mod || !mod.__esModule ? __defProp(target, "default", { value: mod, enumerable: true }) : target,
+  mod
+));
 var __toCommonJS = (mod) => __copyProps(__defProp({}, "__esModule", { value: true }), mod);
 
 // src/index.ts
@@ -477,6 +487,28 @@ async function signOut(config) {
   );
 }
 
+// src/index.client.tsx
+var import_react = require("react");
+var import_swr = __toESM(require("swr"));
+var import_jsx_runtime = require("react/jsx-runtime");
+var CsrfContext = (0, import_react.createContext)(null);
+function CsrfProvider({
+  token,
+  children
+}) {
+  return /* @__PURE__ */ (0, import_jsx_runtime.jsx)(CsrfContext.Provider, { value: token, children });
+}
+function CsrfInput() {
+  const token = (0, import_react.useContext)(CsrfContext);
+  if (token === null) {
+    console.warn(
+      "[next-jwt-auth] CsrfInput component was rendered without a CsrfProvider parent. The CSRF token will not be included in form submissions."
+    );
+  }
+  return /* @__PURE__ */ (0, import_jsx_runtime.jsx)("input", { type: "hidden", name: "csrf_token", value: token || "" });
+}
+var AuthContext = (0, import_react.createContext)(null);
+
 // src/service.ts
 var AuthService = class {
   constructor(config) {
@@ -500,6 +532,18 @@ var AuthService = class {
       providers: config.providers ?? {},
       csrfEnabled: config.csrfEnabled ?? false
     };
+    this.CsrfProvider = CsrfProvider;
+    this.CsrfInput = CsrfInput;
+  }
+  async getCsrfToken() {
+    const cookieStore = await (0, import_headers2.cookies)();
+    let token = cookieStore.get("csrf_token")?.value;
+    if (!token) {
+      const csrfCookie = getCsrfCookie(this.config.cookies.access.maxAge);
+      token = csrfCookie.value;
+      cookieStore.set(csrfCookie);
+    }
+    return token;
   }
   async getSession() {
     const { session, newTokens } = await getSessionAndRefresh(this.config);
@@ -576,36 +620,46 @@ var AuthService = class {
     }
     return session;
   }
-  async protectAction(options) {
+  createProtectedAction(action, options) {
+    return async (formData) => {
+      await this.protectAction(options, formData);
+      return action(formData);
+    };
+  }
+  async protectAction(options, formData) {
     const { session, newTokens, failureReason } = await getSessionAndRefresh(
       this.config
     );
     await this.handleTokenRefreshInResponse(newTokens);
     if (this.config.csrfEnabled) {
-      const headersList = await (0, import_headers2.headers)();
       const cookieStore = await (0, import_headers2.cookies)();
-      const csrfToken = headersList.get("x-csrf-token");
       const cookieCsrf = cookieStore.get("csrf_token")?.value;
-      if (!csrfToken || !cookieCsrf || csrfToken !== cookieCsrf) {
-        throw new CsrfError(this.config.errorMessages.CsrfError);
+      const formCsrf = formData?.get("csrf_token")?.toString();
+      if (formData) {
+        if (!formCsrf || !cookieCsrf || formCsrf !== cookieCsrf) {
+          throw new CsrfError(this.config.errorMessages.CsrfError);
+        }
+      } else {
+        const headersList = await (0, import_headers2.headers)();
+        const headerCsrf = headersList.get("x-csrf-token");
+        if (!headerCsrf || !cookieCsrf || headerCsrf !== cookieCsrf) {
+          throw new CsrfError(this.config.errorMessages.CsrfError);
+        }
       }
     }
-    if (failureReason === "ACCOUNT_FORBIDDEN") {
+    if (failureReason === "ACCOUNT_FORBIDDEN")
       throw new ForbiddenError("This account is suspended.");
-    }
-    if (!session) {
+    if (!session)
       throw new NotAuthenticatedError(
         this.config.errorMessages.NotAuthenticatedError
       );
-    }
     if (options?.authorize) {
       const isAuthorized = await options.authorize(
         session.identity,
         options.context
       );
-      if (!isAuthorized) {
+      if (!isAuthorized)
         throw new ForbiddenError(this.config.errorMessages.ForbiddenError);
-      }
     }
     return session;
   }
@@ -773,14 +827,20 @@ function createAuth(config) {
   const validatedConfig = validateConfig(config);
   const service = new AuthService(validatedConfig);
   return {
+    getCsrfToken: service.getCsrfToken.bind(service),
+    CsrfProvider: service.CsrfProvider,
+    CsrfInput: service.CsrfInput,
     getSession: service.getSession.bind(service),
     refreshSession: service.refreshSession.bind(service),
     signIn: service.signIn.bind(service),
     signOut: service.signOut.bind(service),
     createMiddleware: service.createMiddleware.bind(service),
+    // Protection methods
     protectPage: service.protectPage.bind(service),
     protectAction: service.protectAction.bind(service),
-    protectApi: service.protectApi.bind(service)
+    // The manual method
+    protectApi: service.protectApi.bind(service),
+    createProtectedAction: service.createProtectedAction.bind(service)
   };
 }
 // Annotate the CommonJS export names for ESM import in node:
