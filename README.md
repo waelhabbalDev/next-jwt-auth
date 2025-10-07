@@ -118,23 +118,10 @@ export const auth = createAuth<AppUserIdentity>({
     refreshTokenSecret: process.env.REFRESH_TOKEN_SECRET!,
   },
   
-  // Secure defaults for cookies are automatically set.
-  // You can override them if needed.
   cookies: {
-    access: { 
-      name: "__at", 
-      maxAge: 15 * 60, // 15 minutes
-    },
-    refresh: { 
-      name: "__rt", 
-      maxAge: 30 * 24 * 60 * 60, // 30 days
-      httpOnly: true, // Prevents client-side JS access
-      secure: process.env.NODE_ENV === 'production', // Only send over HTTPS
-      sameSite: 'lax', // CSRF protection
-    },
-    csrf: {
-      name: "csrf_token", // Default name for the CSRF token cookie
-    }
+    access: { name: "__at", maxAge: 15 * 60 },
+    refresh: { name: "__rt", maxAge: 30 * 24 * 60 * 60 },
+    csrf: { name: "csrf_token" }
   },
 
   redirects: {
@@ -145,7 +132,7 @@ export const auth = createAuth<AppUserIdentity>({
   
   // Recommended Security Features
   refreshTokenRotationIntervalSeconds: 7 * 24 * 60 * 60, // 7 days
-  csrfEnabled: true, // Recommended: true for Server Action protection
+  csrfEnabled: true,
   
   // Optional Features
   rateLimit: checkRateLimit,
@@ -161,96 +148,98 @@ The middleware is **essential** for session refreshing and performance caching.
 // middleware.ts
 import { auth } from "./lib/auth";
 
-// This handles all session validation and token refreshing automatically.
 export default auth.createMiddleware();
 
 export const config = {
-  // IMPORTANT: This library requires the Node.js runtime for the middleware due
-  // to its reliance on database drivers, which are not supported in the Edge runtime.
-  // Please ensure your middleware.ts is configured accordingly.
   runtime: 'nodejs',
-
-  // Match all paths except for static assets and API routes handled elsewhere.
   matcher: ["/((?!api|_next/static|_next/image|favicon.ico).*)"],
 };
 ```
-> **How it works:** The middleware runs a full auth check on every request. If the session is valid, it attaches the user's identity to a request header. This allows subsequent calls to `getSession()` or `protectPage()` to be **near-instantaneous, cached reads**, preventing database waterfalls.
 
 ---
 
 ## Protecting Your Application
 
 ### Protecting Pages and Layouts
-Use `auth.protectPage()` to secure any Server Component. It will automatically redirect unauthenticated users.
+
+Use `auth.protectPage()` to secure any Server Component.
 
 ```tsx
 // app/dashboard/layout.tsx
 import { auth } from "@/lib/auth";
 
 export default async function DashboardLayout({ children }) {
-  // Validates the session and redirects if invalid.
-  // Thanks to the middleware, this is a fast, in-memory check.
   const session = await auth.protectPage();
-  
-  // You can now safely use session.identity
+  // `session.identity` is guaranteed to be valid and available here.
   return <main>{children}</main>;
 }
 ```
 
 ### Protecting Server Actions
-Use `auth.protectAction()`. If `csrfEnabled` is true, it will automatically validate the CSRF token.
+
+Use `auth.protectAction()` or `auth.createProtectedAction()` to secure Server Actions. This automatically validates the CSRF token if `csrfEnabled` is true.
 
 ```ts
 // app/actions.ts
 "use server";
 import { auth } from "@/lib/auth";
-import { NotAuthenticatedError, CsrfError } from "@waelhabbaldev/next-jwt-auth";
+import { CsrfError } from "@waelhabbaldev/next-jwt-auth";
 
 export async function sensitiveAction(formData: FormData) {
   try {
-    const session = await auth.protectAction();
+    const session = await auth.protectAction(undefined, formData);
     // ... logic for the action ...
   } catch (error) {
     if (error instanceof CsrfError) { /* handle CSRF error */ }
-    if (error instanceof NotAuthenticatedError) { /* handle auth error */ }
     // ...
   }
 }
 ```
 
-#### Client-Side CSRF Implementation
-When CSRF protection is enabled, your client-side code must read the `csrf_token` cookie and include its value in the `x-csrf-token` header for every state-changing request (e.g., POST, PUT, DELETE).
+#### CSRF Protection with Forms
 
-Here is a helper function to read the cookie and an example `fetch` call:
+For forms using Server Actions, you must provide a CSRF token. This is done by generating the token on the server page and passing it to a Client Component via a provider.
 
-```javascript
-// A simple helper to get a cookie value by name
-function getCookie(name) {
-  const value = `; ${document.cookie}`;
-  const parts = value.split(`; ${name}=`);
-  if (parts.length === 2) return parts.pop().split(';').shift();
+**1. Generate the token in your Server Page/Component:**
+
+```tsx
+// app/signin/page.tsx (Server Component)
+import { auth } from '@/lib/auth';
+import { CsrfProvider } from '@waelhabbaldev/next-jwt-auth/client';
+import { YourClientFormComponent } from './your-client-form';
+
+export default async function SignInPage() {
+  const csrfToken = await auth.getCsrfToken();
+
+  return (
+    <CsrfProvider token={csrfToken}>
+      <YourClientFormComponent />
+    </CsrfProvider>
+  );
 }
+```
 
-async function callSensitiveAction() {
-  // Read the token from the cookie (ensure 'csrf_token' matches your config)
-  const csrfToken = getCookie('csrf_token');
+**2. Use the `CsrfInput` in your Client Component form:**
 
-  const response = await fetch('/your/api/endpoint', { // or Server Action endpoint
-    method: 'POST',
-    headers: {
-      'Content-Type': 'application/json',
-      'x-csrf-token': csrfToken,
-    },
-    body: JSON.stringify({ message: "Hello World" }),
-  });
+```tsx
+// app/signin/your-client-form.tsx (Client Component)
+'use client';
+import { CsrfInput } from '@waelhabbaldev/next-jwt-auth/client';
+import { yourServerAction } from '@/app/actions';
 
-  if (!response.ok) {
-    // Handle error
-  }
+export function YourClientFormComponent() {
+  return (
+    <form action={yourServerAction}>
+      <CsrfInput />
+      {/* ... other form fields (username, password, etc.) */}
+      <button type="submit">Sign In</button>
+    </form>
+  );
 }
 ```
 
 ### Protecting API Routes
+
 Use `auth.protectApi()`. On failure, it returns a `response` object that you must return.
 
 ```ts
@@ -269,43 +258,85 @@ export async function GET(req, { params }) {
 
 ---
 
-## Advanced Usage
+## Client-Side Usage (React Hooks & Components)
 
-### Asymmetric Keys (RS256)
-For advanced architectures, you can use `RS256` with public/private key pairs.
+This library provides React components and hooks for managing authentication state in Client Components. These must be imported from the `/client` entry point.
 
 ```ts
-// src/lib/auth.ts
-import { createPrivateKey } from "crypto";
-
-const privateKey = createPrivateKey(process.env.PRIVATE_KEY!);
-
-export const auth = createAuth({
-  // ...
-  secrets: {
-    accessTokenSecret: privateKey,
-    refreshTokenSecret: privateKey, // Recommended: use a separate key pair
-  },
-  jwt: {
-    alg: 'RS256',
-  },
-});
+import { AuthProvider, useAuth, CsrfProvider, CsrfInput } from '@waelhabbaldev/next-jwt-auth/client';
 ```
-> **Verification in other services:** To verify a token in a different microservice, you would use the corresponding **public key** as the secret in that service's verification logic.
 
-### Zero-Downtime Key Rotation
-To rotate secrets without invalidating active user sessions, your configuration should support providing multiple valid keys—the new key for signing and the old keys for verification.
+### Setting up `AuthProvider`
 
-While the primary configuration expects a single secret, the underlying `jose` library can be configured to verify against a set of keys. A future version of this library may expose a simpler API for this, such as:
+Wrap your application layout with `AuthProvider` to make the session available globally via the `useAuth` hook.
+
+**1. Create a client-side provider wrapper:**
 
 ```ts
-// Example of a potential future API for seamless rotation:
-secrets: {
-  accessTokenSecrets: [
-    { kid: 'v2', secret: process.env.NEW_SECRET! }, // Used for signing new tokens
-    { kid: 'v1', secret: process.env.OLD_SECRET! }, // Used for verifying old tokens
-  ],
-  // ... similarly for refresh tokens
+// app/providers.tsx
+'use client';
+import { AuthProvider } from '@waelhabbaldev/next-jwt-auth/client';
+
+// Define server actions to fetch and refresh the session for the client
+async function sessionFetcher() {
+  'use server';
+  const { getSession } = await import('@/lib/auth');
+  return getSession();
+}
+
+async function signOutAction() {
+  'use server';
+  const { signOut } = await import('@/lib/auth');
+  await signOut();
+}
+
+export function Providers({ children }) {
+  return (
+    <AuthProvider sessionFetcher={sessionFetcher} signOutAction={signOutAction}>
+      {children}
+    </AuthProvider>
+  );
+}
+```
+
+**2. Use the provider in your root layout:**
+
+```tsx
+// app/layout.tsx
+import { Providers } from './providers';
+
+export default function RootLayout({ children }) {
+  return (
+    <html lang="en">
+      <body>
+        <Providers>{children}</Providers>
+      </body>
+    </html>
+  );
+}
+```
+
+### Using the `useAuth` Hook
+
+Now, any Client Component can access the session state.
+
+```tsx
+// components/user-button.tsx
+'use client';
+import { useAuth } from '@waelhabbaldev/next-jwt-auth/client';
+
+export function UserButton() {
+  const { identity, isAuthenticated, isLoading, signOut } = useAuth();
+
+  if (isLoading) return <div>Loading...</div>;
+  if (!isAuthenticated) return <a href="/signin">Sign In</a>;
+
+  return (
+    <div>
+      <span>Welcome, {identity.username}!</span>
+      <button onClick={() => signOut()}>Sign Out</button>
+    </div>
+  );
 }
 ```
 
@@ -313,16 +344,28 @@ secrets: {
 
 ## API Reference
 
-| Method             | Description                                                                                             | Failure Behavior |
-| ------------------ | ------------------------------------------------------------------------------------------------------- | ---------------- |
-| `protectPage()`    | Secures Pages/Layouts with optional authorization. Redirects on failure.                                | Redirects        |
-| `protectAction()`  | Secures Server Actions. Supports CSRF. Throws specific errors on failure.                               | Throws Error     |
-| `protectApi()`     | Secures API Routes. Returns an error `response` object on failure.                                      | Returns Response |
-| `getSession()`     | **(Fast)** Fetches the session without protection. Reads from middleware cache.                           | Returns `null`   |
-| `refreshSession()` | Manually triggers a session refresh on the server. Useful for client-side error recovery.               | Throws Error     |
-| `signIn()`         | Signs in a user (credentials, provider, or MFA) and sets session cookies.                               | Throws Error     |
-| `signOut()`        | Signs out a user and invalidates their entire session family.                                           | (N/A)            |
-| `createMiddleware()`| **(Essential)** Creates the middleware for session management and caching.                              | (Internal)       |
+### Server-Side API (`@waelhabbaldev/next-jwt-auth`)
+
+| Method                | Description                                                          |
+| --------------------- | -------------------------------------------------------------------- |
+| `createAuth()`        | Creates and configures the main authentication instance.             |
+| `protectPage()`       | Secures Pages/Layouts. Redirects on failure.                         |
+| `protectAction()`     | Secures Server Actions. Throws errors on failure.                    |
+| `protectApi()`        | Secures API Routes. Returns a `Response` object on failure.          |
+| `getSession()`        | **(Fast)** Fetches the session without protection. Reads from cache. |
+| `getCsrfToken()`      | Generates a CSRF token for use with `CsrfProvider`.                  |
+| `createMiddleware()`  | **(Essential)** Creates the middleware for session management.       |
+| `signIn()`            | Signs in a user and sets session cookies.                            |
+| `signOut()`           | Signs out a user and invalidates their session family.               |
+
+### Client-Side API (`@waelhabbaldev/next-jwt-auth/client`)
+
+| Component/Hook    | Description                                                                     |
+| ----------------- | ------------------------------------------------------------------------------- |
+| `AuthProvider`    | React Context provider for making session state available to Client Components. |
+| `useAuth()`       | React hook to access session state (`identity`, `isAuthenticated`, etc.).       |
+| `CsrfProvider`    | Provides a CSRF token to descendant components.                                 |
+| `CsrfInput`       | A hidden input field that automatically includes the CSRF token in a form.      |
 
 ---
 

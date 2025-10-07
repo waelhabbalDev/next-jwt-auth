@@ -1,8 +1,3 @@
-import {
-  CsrfInput,
-  CsrfProvider
-} from "./chunk-2OP7KWVV.mjs";
-
 // src/utils.ts
 function validateAndSanitizeBaseUrl(url) {
   if (typeof url !== "string" || url.length === 0) {
@@ -471,8 +466,6 @@ var AuthService = class {
       providers: config.providers ?? {},
       csrfEnabled: config.csrfEnabled ?? false
     };
-    this.CsrfProvider = CsrfProvider;
-    this.CsrfInput = CsrfInput;
   }
   async getCsrfToken() {
     const cookieStore = await cookies2();
@@ -767,8 +760,6 @@ function createAuth(config) {
   const service = new AuthService(validatedConfig);
   return {
     getCsrfToken: service.getCsrfToken.bind(service),
-    CsrfProvider: service.CsrfProvider,
-    CsrfInput: service.CsrfInput,
     getSession: service.getSession.bind(service),
     refreshSession: service.refreshSession.bind(service),
     signIn: service.signIn.bind(service),
@@ -777,7 +768,6 @@ function createAuth(config) {
     // Protection methods
     protectPage: service.protectPage.bind(service),
     protectAction: service.protectAction.bind(service),
-    // The manual method
     protectApi: service.protectApi.bind(service),
     createProtectedAction: service.createProtectedAction.bind(service)
   };

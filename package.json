@@ -1,6 +1,6 @@
 {
   "name": "@waelhabbaldev/next-jwt-auth",
-  "version": "0.2.4-beta",
+  "version": "0.2.5-beta",
   "description": "A secure, lightweight JWT authentication solution for Next.js, providing access and refresh token handling, middleware support, and easy React integration.",
   "main": "dist/index.js",
   "types": "dist/index.d.ts",
