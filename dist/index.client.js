@@ -35,7 +35,8 @@ __export(index_client_exports, {
   AuthProvider: () => AuthProvider,
   CsrfInput: () => CsrfInput,
   CsrfProvider: () => CsrfProvider,
-  useAuth: () => useAuth
+  useAuth: () => useAuth,
+  useCsrf: () => useCsrf
 });
 module.exports = __toCommonJS(index_client_exports);
 var import_react = require("react");
@@ -48,14 +49,34 @@ function CsrfProvider({
 }) {
   return /* @__PURE__ */ (0, import_jsx_runtime.jsx)(CsrfContext.Provider, { value: token, children });
 }
-function CsrfInput() {
+function useCsrf() {
   const token = (0, import_react.useContext)(CsrfContext);
   if (token === null) {
     console.warn(
-      "[next-jwt-auth] CsrfInput component was rendered without a CsrfProvider parent. The CSRF token will not be included in form submissions."
+      "[next-jwt-auth] useCsrf was called outside of a CsrfProvider. Token will be undefined."
     );
   }
-  return /* @__PURE__ */ (0, import_jsx_runtime.jsx)("input", { type: "hidden", name: "csrf_token", value: token || "" });
+  return token;
+}
+function CsrfInput({
+  getTokenAction
+}) {
+  const contextToken = (0, import_react.useContext)(CsrfContext);
+  const { data: swrToken, isLoading } = (0, import_swr.default)(
+    !contextToken && getTokenAction ? "csrf-token" : null,
+    getTokenAction || null
+  );
+  const token = contextToken || swrToken;
+  if (!contextToken && isLoading) {
+    return null;
+  }
+  if (!token) {
+    console.warn(
+      "[next-jwt-auth] CsrfInput could not find a token. Ensure it's within a CsrfProvider or the `getTokenAction` prop is provided."
+    );
+    return null;
+  }
+  return /* @__PURE__ */ (0, import_jsx_runtime.jsx)("input", { type: "hidden", name: "csrf_token", value: token });
 }
 var AuthContext = (0, import_react.createContext)(null);
 function AuthProvider({
@@ -156,5 +177,6 @@ function useAuth() {
   AuthProvider,
   CsrfInput,
   CsrfProvider,
-  useAuth
+  useAuth,
+  useCsrf
 });
